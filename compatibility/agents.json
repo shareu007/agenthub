@@ -20,8 +20,8 @@
     "codex": {
       "version": "0.167.0-alpha.4",
       "distribution": "platform-provided codex-cli",
-      "status": "version-checked",
-      "reason": "Preinstalled prerelease; no disposable native session; not a stable compatibility promise",
+      "status": "native-transfer-loader",
+      "reason": "Version checked; native app-server thread/resume confirmed ID and transcript of AgentHub-created transfer; native-writer sample and model continuation remain unverified",
       "fixture": null
     },
     "opencode": {
@@ -40,5 +40,13 @@
       "fixture": "tests/fixtures/pi/1.5.2.jsonl",
       "fixture_sha256": "c8c5a4939c2e7390a1dcb11999ce36b16bfb822d0c96d7fd019125455890a906"
     }
+  },
+  "transfer": {
+    "pi": "OpenCode 1.19.5 to Pi 1.5.2: native RPC and terminal load passed",
+    "opencode": "Pi 1.5.2 to OpenCode 1.19.5: native import and terminal load passed",
+    "codex": "Pi 1.5.2 to Codex 0.167.0-alpha.4: native app-server thread/resume passed",
+    "claude": "File adapter roundtrip only; native authenticated load not verified",
+    "agy": "AGY 1.5.6 native fixture to Pi 1.5.2: visible-reply extraction and native RPC load passed; no AGY destination importer",
+    "model_called": false
   }
 }

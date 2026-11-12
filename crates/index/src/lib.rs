@@ -3,7 +3,7 @@ use agenthub_core::{Adapter, Agent, Message, Session, SessionSink, Source};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, path::{Path, PathBuf}, time::Duration};
+use std::{collections::{BTreeMap, HashSet}, fs, path::{Path, PathBuf}, time::Duration};
 
 const APP_ID: i64 = 0x41485542;
 const SCHEMA_VERSION: i64 = 1;
@@ -184,6 +184,11 @@ impl Store {
     /// Order the complete matching result before applying pagination. Columns and
     /// directions come only from typed choices, never from interpolated user input.
     pub fn list_ordered(&self, filter: &Filter, order: ListOrder) -> Result<Vec<SessionRecord>> {
+        self.list_matching(filter, order, None)
+    }
+
+    /// Literal search over identity and indexed documents, before pagination.
+    pub fn list_matching(&self, filter: &Filter, order: ListOrder, query: Option<&str>) -> Result<Vec<SessionRecord>> {
         let group = match order.group {
             GroupBy::None => "",
             GroupBy::Agent => "s.agent ASC,",
@@ -196,9 +201,19 @@ impl Store {
             SortKey::Project => ("s.project_path", false),
         };
         let direction = if descending != order.reverse { "DESC" } else { "ASC" };
-        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {WHERE_FILTER} ORDER BY {group}{column} {direction} NULLS LAST,s.updated_at DESC,s.key ASC LIMIT ?6 OFFSET ?7");
+        let (predicate, args) = matching_args(filter, query);
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {predicate} ORDER BY {group}{column} {direction} NULLS LAST,s.updated_at DESC,s.key ASC LIMIT ?6 OFFSET ?7");
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(filter.args()), session_row)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args), session_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Counts all matches, ignoring page size/offset. Caller chooses agent scope.
+    pub fn session_counts(&self, filter: &Filter, query: Option<&str>) -> Result<BTreeMap<String, i64>> {
+        let (predicate, mut args) = matching_args(filter, query);
+        if args.len() == 7 { args.truncate(5); }
+        let mut stmt = self.conn.prepare(&format!("SELECT s.agent,count(*) FROM sessions s WHERE {predicate} GROUP BY s.agent"))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -246,6 +261,20 @@ impl Store {
     pub fn source_root(&self, key: &str) -> Result<PathBuf> {
         Ok(PathBuf::from(self.conn.query_row("SELECT root FROM sources JOIN sessions ON sources.id=sessions.source_id WHERE sessions.key=?1", [key], |r| r.get::<_,String>(0))?))
     }
+}
+
+fn matching_args(filter: &Filter, query: Option<&str>) -> (String, Vec<rusqlite::types::Value>) {
+    use rusqlite::types::Value;
+    let mut args = filter.args().to_vec();
+    let Some(query) = query.filter(|q| !q.is_empty()) else { return (WHERE_FILTER.into(), args); };
+    args.push(Value::Text(query.into()));
+    let documents = if query.chars().count() >= 3 {
+        args.push(Value::Text(format!("\"{}\"",query.replace('"',"\"\""))));
+        "SELECT d.session_key FROM documents_fts JOIN documents d ON d.id=documents_fts.rowid WHERE documents_fts MATCH ?9"
+    } else {
+        "SELECT session_key FROM documents WHERE instr(lower(body),lower(?8))>0"
+    };
+    (format!("{WHERE_FILTER} AND (instr(lower(s.key),lower(?8))>0 OR s.key IN ({documents}))"), args)
 }
 
 fn path_text(path: &Path) -> Result<String> { path.to_str().map(str::to_owned).context("non UTF-8 paths are not supported by the SQLite index") }

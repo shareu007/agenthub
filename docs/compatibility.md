@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | AGY | 1.5.6 | 有：受控本地 Gemini SSE + 原生 CLI 写出 | 真实 `resume --exec` 终端显示唯一历史标记 | 未调用 |
 | Claude Code | 2.1.322 | 无 | 未执行：未登录、无专用会话 | 未执行 |
-| Codex | 0.167.0-alpha.4 | 无 | 未执行：无专用会话 | 未执行 |
+| Codex | 0.167.0-alpha.4 | 无原生写出样本 | 已验证 AgentHub 移交文件的真实 app-server loader；原生写出会话仍待验收 | 未执行 |
 | OpenCode | 1.19.5 | 有：本地原生 API + noReply | 真实 `resume --exec` 终端显示唯一历史标记 | 未调用 |
 | Pi | 1.5.2 | 有：原生 SessionManager 写出 | 真实 `resume --exec` 终端 + RPC 身份/消息校验 | 未调用 |
 
@@ -50,4 +50,6 @@ python3 scripts/verify_native.py \
 2. 已通过原生 `modelProvider="gemini"` + 本地受控 SSE 端点在隔离目录写出包含唯一标记、思考、工具调用（`read_file`）与工具结果的真实会话，无私人工作会话或真实密钥写入夹具。
 3. 已核实 `conversation_summaries.db` 与 `conversations/<id>.db` 的实际 schema 和 Protobuf wire 路径，补齐 `step_type=15` 的思考（`20.3`）与工具调用（`20.7`）解码并递增 `PARSER_VERSION=2`，建立 `tests/fixtures/agy/1.5.6.sql` 与回归测试。
 4. 已在默认存储布局（`$HOME/.gemini/antigravity-cli`）下运行 `scripts/verify_native.py` 终端探针，验证 `agenthub resume agy:<id> --exec`（`agy --conversation <id>`）在真实 AGY TUI 中加载并渲染历史标记（见 `compatibility/evidence/agy-terminal.json`）。经实测顶层 `agy` 不接受 `--gemini-dir`/`--app-data-dir`（仅 `agy acp` 子命令提供），自定义根仍明确拒绝恢复。
-5. 真实远端模型续聊与侧表（`gen_metadata`/`executor_metadata`/附件/子轨迹）语义展开仍不在当前验收范围内；Claude 和 Codex 同样仍需各自版本下的专用原生会话与恢复证据。
+5. 真实远端模型续聊与侧表（`gen_metadata`/`executor_metadata`/附件/子轨迹）语义展开仍不在当前验收范围内；Claude 仍需登录与原生会话；Codex 已补移交文件的真实 loader 证据，但仍缺该版本原生写出的专用样本。
+
+新增的跨 Agent 文本移交及方向验证见 [session transfer](session-transfer.md)。

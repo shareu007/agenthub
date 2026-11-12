@@ -7,12 +7,13 @@ use serde::Deserialize;
 use std::{collections::BTreeMap, env, fs, io::{self, Write}, path::{Path, PathBuf}, process::{Command, ExitCode}};
 mod ui;
 mod listing;
+mod transfer;
 use ui::{cell, safe, Ui};
 
 #[derive(Parser)]
 #[command(name="agenthub", version, about="Find, read, and resume your coding-agent sessions",
-    long_about="A local, read-only session index for Claude Code, Codex, OpenCode, Pi, and AGY.\nRuns on demand on Linux and macOS. Run without a subcommand to browse sessions. Press Enter to resume, or use resume --exec.",
-    after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  ah\n  agenthub list --agent codex --group-by project --sort time\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
+    long_about="A local session index for Claude Code, Codex, OpenCode, Pi, and AGY. Source discovery is read-only; transfer creates a new native session.\nRuns on demand on Linux and macOS. Run without a subcommand to browse sessions. Press Enter to resume, or use resume --exec.",
+    after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  ah\n  agenthub list --agent codex --group-by project --sort time\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  ah transfer codex:SESSION_ID --to pi --dry-run\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
 struct Cli {
     /// Index path; never point this at an agent database.
     #[arg(long, global=true, env="AGENTHUB_DB")]
@@ -52,6 +53,9 @@ enum Action {
     Search { query: String, #[command(flatten)] selection: Selection },
     /// Print the native resume command, or run it with --exec.
     Resume { id: String, #[arg(long="exec")] execute: bool },
+    /// Copy user/assistant text into a NEW native session of another agent.
+    #[command(alias="convert")]
+    Transfer(transfer::TransferArgs),
     /// Inspect source paths, read capabilities, and installed native executables.
     Doctor,
 }
@@ -122,12 +126,21 @@ fn absolute(path: &Path, home: &Path) -> Result<PathBuf> {
     let path = if path.is_absolute() { path } else { env::current_dir()?.join(path) };
     // Canonicalize existing paths so a symlink cannot bypass source/index overlap checks.
     if path.try_exists()? { return Ok(fs::canonicalize(path)?); }
-    if let Some(parent) = path.parent() {
-        if parent.try_exists()? {
-            return Ok(fs::canonicalize(parent)?.join(path.file_name().context("missing filename")?));
+    // Resolve the closest existing ancestor, including symlinks above multiple
+    // missing directories. Checking only the immediate parent lets an index path
+    // alias escape the source-root overlap guard before create_dir_all runs.
+    let mut ancestor = path.as_path();
+    let mut missing = Vec::new();
+    while !ancestor.try_exists()? {
+        if fs::symlink_metadata(ancestor).is_ok_and(|m|m.file_type().is_symlink()) {
+            bail!("cannot resolve dangling symlink {}; create or correct its target first",ancestor.display());
         }
+        missing.push(ancestor.file_name().context("cannot resolve missing path components")?.to_os_string());
+        ancestor = ancestor.parent().context("path has no existing ancestor")?;
     }
-    Ok(path)
+    let mut resolved = fs::canonicalize(ancestor)?;
+    for component in missing.into_iter().rev() { resolved.push(component); }
+    Ok(resolved)
 }
 
 fn parse_time(s: &str) -> Result<i64> {
@@ -241,7 +254,7 @@ fn run(cli: Cli) -> Result<bool> {
             if interactive {
                 out.flush()?;
                 drop(out);
-                let plan = listing::choose(&store, args)?;
+                let plan = listing::choose(&mut store, &settings, args, &ui)?;
                 drop(store);
                 return match plan { Some(plan) => execute_plan(plan), None => Ok(true) };
             }
@@ -291,6 +304,17 @@ fn run(cli: Cli) -> Result<bool> {
                 drop(out);
                 drop(store);
                 return execute_plan(plan);
+            }
+        }
+        Action::Transfer(args) => {
+            let plan = transfer::prepare(&store, &settings, &args.id, args.to, args.cwd, args.last)?;
+            if args.dry_run {
+                if cli.json { writeln!(out,"{}",serde_json::json!({"dry_run":true,"preview":plan}))?; }
+                else { transfer::preview(&mut out, &plan)?; }
+            } else {
+                let receipt = transfer::write(&mut store, &settings, &plan)?;
+                if cli.json { writeln!(out,"{}",serde_json::to_string(&receipt)?)?; }
+                else { transfer::receipt(&mut out, &receipt)?; }
             }
         }
         Action::Doctor => unreachable!(),

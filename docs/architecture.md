@@ -7,11 +7,12 @@
 | `agenthub-core` | Agent、Session、Message、Source、Adapter、SessionSink、恢复计划和未来 Archive 类型 | SQLite、终端、网络 |
 | `agenthub-adapters` | 发现来源、格式识别、转换、私有 SQLite 快照、二进制字段解码 | 自有索引、命令展示 |
 | `agenthub-index` | schema 版本、来源状态、增量判断、原子更新、查询/FTS | Agent 格式细节、进程启动 |
+| `agenthub-transfer` | 活动分支文字提取、新原生会话写入、OpenCode 原生导入 | 修改源会话、自动模型请求、迁移工具/权限状态 |
 | `agenthub-cli` | 配置、参数、文本/JSON、退出码、原生恢复进程 | 常驻服务、GUI |
 
 Adapter 是 Rust trait，内建适配器静态注册，新增 Agent 只需实现 `agent/root/discover/read` 并在工厂注册。当前不定义跨动态库的 ABI，也不引入插件进程或网络协议。TUI/GUI 可以复用 Core 与 Index；CLI 不作为共享业务逻辑的唯一入口。
 
-同步 `std::fs` / `BufReader` 配合单线程，避免 Tokio、线程池和监控服务的启动成本。无命令时不运行任何进程。一次同步的各来源串行导入；其他进程的查询可以通过索引自己的 WAL 读取最后一次已提交的数据。
+同步 `std::fs` / `BufReader` 配合单线程，避免 Tokio、线程池和监控服务的启动成本。无参数默认打开列表，退出后不留 AgentHub 常驻后台。一次同步的各来源串行导入；其他进程的查询可以通过索引自己的 WAL 读取最后一次已提交的数据。
 
 ## 2. 模型
 
@@ -67,7 +68,7 @@ JSONL 单条记录上限 32 MiB；过大的记录报错并保留上次成功索�
 
 ## 6. 恢复与配置
 
-Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell 引号正确的计划，只有明确 `--exec` 时才启动进程，不执行 `sh -c`。恢复必须使用原会话，不能把索引当作新的原生会话文件写回。缺失来源不可恢复；项目目录丢失或程序未安装时输出启动错误。
+Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell 引号正确的计划，只有明确 `--exec` 或在列表按 Enter 时才恢复原生会话，不执行 `sh -c`。恢复必须使用原会话，不能把索引当作新的原生会话文件写回。缺失来源不可恢复；项目目录丢失或程序未安装时输出启动错误。
 
 `doctor` 检查来源、发现错误及 PATH 中的程序文件，不运行 Agent、不创建索引。它不是原生 CLI 能否认证/恢复的联网诊断。
 
@@ -75,8 +76,10 @@ Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell �
 
 当前只定义 `ArchiveDraft` 和 `ArchiveRepository`，不提供实现。预期未来的 Archive 有自己的逻辑项目/文件夹实体，收藏记录引用 `session_key`，自定义标题和备注属于收藏层。这样修改收藏不会重写原 Agent 文件，也不会被下一次索引更新覆盖。原生的“archived session”目录只是来源位置，和 AgentHub 收藏语义不同。
 
-快照引用应在未来采用单独模型；其身份、可用性、设备来源和原生恢复能力不能与当前可变来源混为一谈。当前不提前加入 SSH、同步调度、Git 关联、网络服务或跨 Agent 重建上下文的协议。
+快照引用应在未来采用单独模型；其身份、可用性、设备来源和原生恢复能力不能与当前可变来源混为一谈。已新增文本级 session transfer，复制到新的原生会话，详见 [移交设计](session-transfer.md)。当前不加入 SSH、同步调度、Git 关联、网络服务或跨 Agent 工具/权限状态迁移协议。
 
 ## 8. 验证边界
 
-2026-11-12 在 Linux / Rust 1.85.0 下运行了 31 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。新增 AGY 1.5.6、Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；三者均通过真实 `resume --exec` 终端历史加载，Pi 另通过 RPC 身份及消息校验；未调用远端模型续聊。Claude 和 Codex 的真实恢复仍未验收，macOS / stable Rust 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。
+2026-11-12 在 Linux / Rust 1.85.0 下运行了 39 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。新增 AGY 1.5.6、Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；三者均通过真实 `resume --exec` 终端历史加载，Pi 另通过 RPC 身份及消息校验；未调用远端模型续聊。Claude 真实恢复尚未验收；Codex 已新增移交文件的原生 loader 验证，原生写出样本仍未验收。macOS / stable Rust 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。
+
+本次新增选择器、全索引搜索与移交的验证及性能/缓存 review 见 [代码 review](review-session-browser.md)。

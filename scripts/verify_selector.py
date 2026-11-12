@@ -12,6 +12,7 @@ from pathlib import Path
 import pty
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -53,7 +54,7 @@ def terminal(command, environment, actions, size=(26, 110)):
                 break
         else:
             raise RuntimeError('Selector did not complete; output tail: ' + bytes(output[-2000:]).decode(errors='replace'))
-        assert stage == len(actions), f'Only {stage}/{len(actions)} keyboard actions executed'
+        assert stage == len(actions), f'Only {stage}/{len(actions)} keyboard actions executed; output={bytes(output[-2000:])!r}'
         assert termios.tcgetattr(slave) == original, 'Terminal attributes were not restored'
         return process.wait(timeout=2), bytes(output)
     finally:
@@ -78,7 +79,7 @@ def main():
         for native_id, day in [('a', 1), ('b', 3), ('c', 2)]:
             rows = [{'type': 'session', 'version': 3, 'id': native_id, 'cwd': str(project),
                      'timestamp': f'2026-01-0{day}T00:00:00Z'},
-                    {'type': 'message', 'message': {'role': 'user', 'content': f'fixture {native_id} 渲染'}}]
+                    {'type': 'message', 'id': 'm-'+native_id, 'parentId': None, 'message': {'role': 'user', 'content': f'fixture {native_id} 渲染'}}]
             (source/f'{native_id}.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
         config = root/'config.toml'
         config.write_text('database = '+json.dumps(str(root/'index.db'))+'\n[sources]\n'+''.join(
@@ -99,7 +100,7 @@ def main():
                            PATH=str(bindir)+os.pathsep+os.environ['PATH'], AGENTHUB_TEST_RESULT=str(result_file))
         subprocess.run([binaries[0], '--config', str(config), 'sync', '--json'], check=True, capture_output=True)
         for binary in binaries:
-            base = [binary, '--config', str(config)]
+            base = [binary, '--config', str(config), '--color', 'always']
             code, output = terminal(base, environment, [(b'Enter: resume', b'\x1b[B\r')])
             assert code == 17, (code, output)
             launched = json.loads(result_file.read_text())
@@ -126,6 +127,74 @@ def main():
             assert code == 0 and not result_file.exists()
             (source/'b.hidden').rename(source/'b.jsonl')
             print(Path(binary).name+': selection, exec, terminal restore, quit, grouping, sorting, paging, JSON and source failure passed')
+        # Synthetic index rows deliberately fill the first 50 results with AGY.
+        # Other Agent tabs and body search must still reach all matching sessions.
+        with sqlite3.connect(root/'index.db') as db:
+            sid = db.execute('SELECT id FROM sources LIMIT 1').fetchone()[0]
+            for agent, count in [('agy', 60), ('claude', 1), ('codex', 1), ('opencode', 1)]:
+                for i in range(count):
+                    key = f'{agent}:seed{i}'
+                    db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                               (key, f'seed{i}', agent, sid, 'Hidden '+agent.title(), str(project), 1, 2,
+                                str(root/f'{agent}-synthetic-source'), None, '[]', 1, 1))
+                    if agent == 'claude':
+                        db.execute('INSERT INTO documents(session_key,ordinal,body) VALUES(?,0,?)',
+                                   (key, 'BODY_ONLY_RENDER_TOKEN_1983 渲染猫 LONG_SEARCH_'+'x'*72+'_END'))
+        for binary in binaries:
+            base = [binary, '--config', str(config), '--color', 'always']
+            code, output = terminal(base, environment, [(b'Enter: resume', b'2'),
+                                                        (b'agent=codex', b'q')])
+            assert code == 0 and b'Hidden Codex' in output
+            for label in [b'1 Claude:1', b'2 Codex:1', b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']:
+                assert label in output, (label, output)
+            # Important headings and the selected row receive explicit styles.
+            assert b'\x1b[1;93m' in output and b'\x1b[1;30;46m' in output
+            code, output = terminal(base, environment, [(b'Enter: resume', b'/'),
+                (b'Ctrl-U clear', b'BODY_ONLY_RENDER_TOKEN_1983'),
+                (b'1 matches', b'\r'), (b'Search: /BODY_ONLY_RENDER_TOKEN_1983', b'q')])
+            assert code == 0 and b'Hidden Claude' in output
+            # Enter while editing must apply a query, not open a native program.
+            assert not result_file.exists()
+            long_query = b'LONG_SEARCH_'+b'x'*72+b'_END'
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'/'),
+                (b'Ctrl-U clear', long_query), (b'/'+long_query, b'\r'),
+                (b'1 matches', b'q')])
+            assert code == 0
+
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'/'),
+                (b'Ctrl-U clear', '渲染猫'.encode()), (b'1 matches', b'\r'),
+                ('Search: /渲染猫'.encode(), b'\x1b'), (b'66 matches', b'q')])
+            assert code == 0
+            # Cancel an edited search, and ensure its previous result set returns.
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'/'),
+                (b'Ctrl-U clear', b'no-match-token'), (b'0 matches', b'\x1b'),
+                (b'66 matches', b'q')])
+            assert code == 0
+            # Modal handoff preview/cancel must never create a native file.
+            before = set(source.rglob('*.jsonl'))
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'4'),
+                (b'agent=pi', b't'), (b'SESSION TRANSFER', b'4'),
+                (b'confirm transfer', b'\x1b'), (b'Enter: resume', b'q')])
+            assert code == 0 and set(source.rglob('*.jsonl')) == before
+            print(Path(binary).name+': all five tabs, >50-row counts, global body/Unicode search, search cancellation and transfer preview passed')
+        original_sources = {p: p.read_bytes() for p in source.glob('*.jsonl')}
+        code, output = terminal([binaries[0], '--config', str(config), '--color', 'always'], environment,
+            [(b'Enter: resume', b'4'), (b'agent=pi', b't'),
+             (b'SESSION TRANSFER', b'2'), (b'confirm transfer', b'y'),
+             (b'Created codex:', b'q')])
+        assert code == 0 and len(list((root/'codex').rglob('*.jsonl'))) == 1
+        assert all(p.read_bytes() == content for p, content in original_sources.items())
+        code, output = terminal([binaries[0], '--config', str(config), '--color', 'never'], environment,
+                                [(b'Enter: resume', b'q')])
+        assert code == 0 and b'\x1b[1;93m' not in output and b'\x1b[1;30;46m' not in output
+        print('Confirmed terminal transfer creates a new Codex session, preserves sources, and no-color is honored')
+        db.execute('UPDATE sessions SET title=? WHERE key=?', ('Huge '+chr(0x301)*10000, 'agy:seed0'))
+        db.commit()
+        code, output = terminal([binaries[0], '--config', str(config), '--color', 'always'], environment,
+                                [(b'Enter: resume', b'q')])
+        assert code == 0 and len(output) < 20000, 'Combining-character title expanded beyond terminal preview bounds'
+        print('Pathological zero-width title remains bounded in terminal output')
+        db.close()
         # Also check an empty list on a tiny terminal can be dismissed.
         (root/'index.db').unlink()
         code, _ = terminal([binaries[0], '--config', str(config)], environment, [(b'Enter: resume', b'q')], size=(10, 100))

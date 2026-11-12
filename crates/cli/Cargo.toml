@@ -17,6 +17,7 @@ path = "src/bin/ah.rs"
 agenthub-core.workspace = true
 agenthub-adapters.workspace = true
 agenthub-index.workspace = true
+agenthub-transfer.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import pty
 import re
+import selectors
 import select
 import shutil
 import signal
@@ -84,6 +85,59 @@ def terminal_probe(command, marker, timeout):
             'output_sha256': hashlib.sha256(raw).hexdigest(), 'stopped_after_load': True}
 
 
+def codex_loader(binary, plan, native_id, marker, timeout):
+    environment = dict(os.environ, **dict(plan['env']))
+    process = subprocess.Popen([binary, 'app-server'], env=environment, cwd=plan['cwd'],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    buffer = bytearray()
+
+    def send(value):
+        process.stdin.write((json.dumps(value)+'\n').encode())
+        process.stdin.flush()
+
+    def response(identifier):
+        deadline = time.monotonic()+timeout
+        total = 0
+        while time.monotonic() < deadline:
+            while b'\n' in buffer:
+                line, _, remaining = buffer.partition(b'\n')
+                buffer[:] = remaining
+                item = json.loads(line)
+                if item.get('id') == identifier:
+                    return item
+            if selector.select(0.1):
+                block = os.read(process.stdout.fileno(), 65536)
+                if not block:
+                    raise RuntimeError('Codex loader exited before confirming the transcript')
+                buffer.extend(block)
+                total += len(block)
+                if total > 4*1024*1024:
+                    raise RuntimeError('Codex loader exceeded the evidence output limit')
+        raise RuntimeError('Codex loader timed out without confirming the transcript')
+
+    try:
+        send({'id': 0, 'method': 'initialize', 'params': {'clientInfo': {'name': 'agenthub-native-check', 'version': '0.1.0'}}})
+        if 'result' not in response(0):
+            raise RuntimeError('Codex app-server initialization failed')
+        send({'method': 'initialized'})
+        send({'id': 1, 'method': 'thread/resume', 'params': {'threadId': native_id}})
+        result = response(1).get('result', {})
+        if result.get('thread', {}).get('id') != native_id or marker not in json.dumps(result, ensure_ascii=False):
+            raise RuntimeError('Codex loader did not confirm the same session ID and transcript marker')
+        return {'probe': 'native-codex-app-server-thread-resume', 'original_id_confirmed': True,
+                'transcript_marker_seen': True, 'model_called': False}
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        selector.close()
+
+
 def check(args):
     agent, separator, native_id = args.session.partition(':')
     if not separator or not native_id:
@@ -103,6 +157,10 @@ def check(args):
     binary = native_version(agent, entry['version'], environment)
     if args.probe == 'terminal':
         return dict(terminal_probe(command + ['resume', args.session, '--exec'], args.expect, args.timeout), version=entry['version'])
+    if args.probe == 'codex-loader':
+        if agent != 'codex':
+            raise RuntimeError('codex-loader probe requires a Codex session')
+        return dict(codex_loader(binary, plan, native_id, args.expect, args.timeout), version=entry['version'])
     if agent != 'pi':
         raise RuntimeError('RPC probe is currently verified only for Pi; use terminal probe for other agents')
     result = subprocess.run([binary, *plan['args'], '--mode', 'rpc', '--no-extensions', '--no-skills', '--no-prompt-templates'],
@@ -112,6 +170,8 @@ def check(args):
     state = replies.get('state', {})
     messages = replies.get('messages', {})
     if (result.returncode or not state.get('success') or not messages.get('success')
+            or state['data'].get('isStreaming') is not False
+            or state['data'].get('isCompacting') is not False
             or state['data'].get('sessionId') != native_id
             or args.expect not in json.dumps(messages['data'], ensure_ascii=False)):
         raise RuntimeError('Native Pi did not confirm the original identity and transcript marker')
@@ -125,7 +185,7 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--session', required=True)
     parser.add_argument('--expect', required=True, help='Unique non-sensitive marker already in the test transcript')
-    parser.add_argument('--probe', choices=['terminal', 'pi-rpc'], default='terminal')
+    parser.add_argument('--probe', choices=['terminal', 'pi-rpc', 'codex-loader'], default='terminal')
     parser.add_argument('--timeout', type=float, default=20)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()

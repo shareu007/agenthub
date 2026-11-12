@@ -24,6 +24,15 @@ impl Ui {
         let value = cell(value);
         if self.color { format!("\x1b[1;36m{value}\x1b[0m") } else { value }
     }
+    fn paint(&self, value: &str, code: &str) -> String {
+        let value = cell(value);
+        if self.color { format!("\x1b[{code}m{value}\x1b[0m") } else { value }
+    }
+    pub fn bar(&self, value: &str) -> String { self.paint(value, "1;97;44") }
+    pub fn selected(&self, value: &str) -> String { self.paint(value, "1;30;46") }
+    pub fn title(&self, value: &str) -> String { self.paint(value, "1;93") }
+    pub fn dim(&self, value: &str) -> String { self.paint(value, "90") }
+    pub fn error(&self, value: &str) -> String { self.paint(value, "1;91") }
 }
 
 pub fn safe(text: &str) -> String {

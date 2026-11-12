@@ -159,3 +159,88 @@ fn grouping_and_sorting_happen_before_list_pagination() {
     assert!(text.find("── /tmp ──").unwrap() < text.find("── /z ──").unwrap());
     assert!(!run(&config, &["list", "--sort", "arbitrary-sql"]).status.success());
 }
+
+#[test]
+fn transfer_preview_is_read_only_and_written_session_is_immediately_indexed() {
+    let (dir, config) = fixture();
+    let source=dir.path().join("pi/session.jsonl");
+    let original=fs::read(&source).unwrap();
+    assert!(run(&config,&["sync"]).status.success());
+    let preview=run(&config,&["transfer","pi:ui","--to","codex","--dry-run","--json"]);
+    assert!(preview.status.success(),"{}",String::from_utf8_lossy(&preview.stderr));
+    let preview:serde_json::Value=serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["dry_run"],true);
+    assert_eq!(preview["preview"]["turn_count"],1);
+    assert!(!dir.path().join("codex").exists());
+    let result=run(&config,&["transfer","pi:ui","--to","codex","--json"]);
+    assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+    let receipt:serde_json::Value=serde_json::from_slice(&result.stdout).unwrap();
+    let key=receipt["key"].as_str().unwrap();
+    assert!(key.starts_with("codex:") && std::path::Path::new(receipt["path"].as_str().unwrap()).exists());
+    let indexed=run(&config,&["list","--agent","codex","--json"]);
+    let rows:Vec<serde_json::Value>=serde_json::from_slice(&indexed.stdout).unwrap();
+    assert_eq!(rows[0]["key"],key);
+    assert_eq!(fs::read(source).unwrap(),original);
+    let unsupported=run(&config,&["transfer","pi:ui","--to","agy","--dry-run"]);
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8(unsupported.stderr).unwrap().contains("no verified native import"));
+    assert!(!dir.path().join("agy").exists());
+    assert!(!run(&config,&["transfer","pi:ui","--to","codex","--last","0"]).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn opencode_import_stream_uses_native_keys_and_requires_positive_acknowledgement() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir,config)=fixture();
+    assert!(run(&config,&["sync"]).status.success());
+    let bin=dir.path().join("bin");fs::create_dir(&bin).unwrap();
+    let program=bin.join("opencode");
+    fs::write(&program, r#"#!/usr/bin/env python3
+import sys,os,json,stat
+if sys.argv[1]=='--version':
+ print('1.19.5')
+else:
+ assert stat.S_IMODE(os.stat(sys.argv[2]).st_mode)==0o600
+ with open(sys.argv[2]) as f: payload=json.load(f)
+ with open(os.environ['AH_TEST_PAYLOAD'],'w') as f: json.dump(payload,f)
+ if os.environ['AH_TEST_ACK']=='yes': print('Imported session: '+payload['info']['id'])
+ else: print('Import failed')
+"#).unwrap();
+    fs::set_permissions(&program,fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths=vec![bin];paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    let path=std::env::join_paths(paths).unwrap();
+    let payload=dir.path().join("payload.json");
+    let invoke=|ack| Command::new(env!("CARGO_BIN_EXE_agenthub")).arg("--config").arg(&config)
+        .args(["transfer","pi:ui","--to","opencode","--json"])
+        .env("PATH",&path).env("AH_TEST_PAYLOAD",&payload).env("AH_TEST_ACK",ack).output().unwrap();
+    assert!(!invoke("no").status.success());
+    let result=invoke("yes");assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+    let body:serde_json::Value=serde_json::from_slice(&fs::read(payload).unwrap()).unwrap();
+    let part=&body["messages"][0]["parts"][0];
+    assert_eq!(part["sessionID"],body["info"]["id"]);
+    assert_eq!(part["messageID"],body["messages"][0]["info"]["id"]);
+    assert_eq!(part["type"],"text");assert!(part["text"].as_str().unwrap().contains("渲染"));
+    let receipt:serde_json::Value=serde_json::from_slice(&result.stdout).unwrap();
+    assert!(receipt["warnings"].as_array().unwrap().iter().any(|w|w.as_str().unwrap().contains("not visible")));
+}
+
+#[cfg(unix)]
+#[test]
+fn index_cannot_alias_into_source_through_multiple_missing_directories() {
+    let (dir,config)=fixture();
+    let alias=dir.path().join("source-alias");
+    std::os::unix::fs::symlink(dir.path().join("pi"),&alias).unwrap();
+    let result=Command::new(env!("CARGO_BIN_EXE_agenthub")).arg("--config").arg(config)
+        .arg("--db").arg(alias.join("missing/deep/index.db")).arg("list").output().unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8(result.stderr).unwrap().contains("index path overlaps"));
+    assert!(!dir.path().join("pi/missing").exists());
+    let dangling=dir.path().join("dangling-index");
+    std::os::unix::fs::symlink(dir.path().join("pi/new-index.db"),&dangling).unwrap();
+    let result=Command::new(env!("CARGO_BIN_EXE_agenthub")).arg("--config").arg(dir.path().join("config.toml"))
+        .arg("--db").arg(dangling).arg("list").output().unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8(result.stderr).unwrap().contains("dangling symlink"));
+    assert!(!dir.path().join("pi/new-index.db").exists());
+}

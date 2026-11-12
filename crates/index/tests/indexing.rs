@@ -172,4 +172,13 @@ fn global_ordering_grouping_and_null_times_have_stable_pages() {
     assert_eq!(grouped.iter().map(|r|r.session.key.as_str()).collect::<Vec<_>>(), ["codex:cx", "pi:a"]);
     let reverse = store.list_ordered(&Filter::recent(), ListOrder{sort:SortKey::Agent,reverse:true,..Default::default()}).unwrap();
     assert_eq!(reverse.last().unwrap().session.key, "codex:cx");
+    let counts = store.session_counts(&Filter{limit:1,offset:99,..Filter::recent()}, None).unwrap();
+    assert_eq!(counts["pi"],4);
+    assert_eq!(counts["codex"],1);
+    let matching = store.list_matching(&Filter{limit:1,offset:2,..Filter::recent()},ListOrder::default(),Some("SORT FIXTURE")).unwrap();
+    assert_eq!(matching[0].session.key,"pi:b");
+    assert_eq!(store.session_counts(&Filter::recent(),Some("sort fixture")).unwrap()["pi"],4);
+    assert_eq!(store.list_matching(&Filter::recent(),ListOrder::default(),Some("codex:cx")).unwrap().len(),1);
+    assert!(store.list_matching(&Filter::recent(),ListOrder::default(),Some("' OR 1=1; --")).unwrap().is_empty());
+    assert_eq!(store.session_counts(&Filter::recent(),Some("")).unwrap(),counts);
 }

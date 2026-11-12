@@ -103,6 +103,19 @@ impl Adapter for AgyAdapter {
     }
 }
 
+/// Extract only visible prose for handoff from the already retained raw bytes.
+/// No second decoded-reply cache is added to the index; older indexed records
+/// retain the same binary contract and remain usable.
+pub fn agy_assistant_reply(raw: &Value) -> Result<Option<String>> {
+    anyhow::ensure!(raw["encoding"] == "agy-protobuf" && raw["step_type"] == 15 && raw["step_format"] == 0,
+        "unsupported AGY assistant record for transfer");
+    let encoded = raw["step_payload_base64"].as_str().context("missing AGY payload for transfer")?;
+    anyhow::ensure!(encoded.len() <= (32usize * 1024 * 1024).div_ceil(3) * 4, "AGY transfer payload exceeds 32 MiB");
+    let payload = STANDARD.decode(encoded).context("invalid AGY transfer payload")?;
+    if let Some(reply) = protobuf::text_at(&payload, &[20,8])? { return Ok(Some(reply)); }
+    protobuf::text_at(&payload, &[20,1])
+}
+
 fn assistant_text(payload: &[u8]) -> Result<String> {
     let mut parts = Vec::new();
     if let Some(thinking) = protobuf::text_at(payload, &[20, 3])?.filter(|s| !s.is_empty()) {

@@ -1,0 +1,14 @@
+{
+  "checked_at": "2026-11-12T03:32:26.749444+00:00",
+  "session": "pi:2ce5b791-9e30-4916-9315-35f56a732216",
+  "scope": "native load only; no model continuation or tool execution",
+  "version": "1.5.2",
+  "probe": "native-pi-rpc-from-agenthub-plan",
+  "original_id_confirmed": true,
+  "transcript_marker_seen": true,
+  "message_count": 1,
+  "model_called": false,
+  "status": "passed",
+  "source": "opencode:ses_e326ec748ffePgLiZVEam9royd",
+  "source_version": "1.19.5"
+}

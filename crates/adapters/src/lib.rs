@@ -5,7 +5,7 @@ mod opencode;
 mod protobuf;
 mod sqlite;
 
-pub use agy::AgyAdapter;
+pub use agy::{AgyAdapter, agy_assistant_reply};
 pub use jsonl::JsonlAdapter;
 pub use opencode::OpenCodeAdapter;
 

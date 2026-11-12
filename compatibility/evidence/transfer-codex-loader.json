@@ -1,0 +1,14 @@
+{
+  "checked_at": "2026-11-12T03:31:48.428246+00:00",
+  "session": "codex:68c7c843-e29a-41a6-9a67-ce1ad23e4706",
+  "scope": "native load only; no model continuation or tool execution",
+  "probe": "native-codex-app-server-thread-resume",
+  "original_id_confirmed": true,
+  "transcript_marker_seen": true,
+  "model_called": false,
+  "version": "0.167.0-alpha.4",
+  "status": "passed",
+  "source": "pi:01a1cd90-1c83-7753-bc2e-2d0c9bac8cf4",
+  "source_version": "1.5.2",
+  "source_unchanged": true
+}

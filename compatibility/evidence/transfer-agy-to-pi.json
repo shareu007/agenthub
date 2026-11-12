@@ -1,0 +1,17 @@
+{
+  "checked_at": "2026-11-12T04:59:29.809779+00:00",
+  "session": "pi:1a2ec22d-bab3-4fb2-a86b-c221ede0fe46",
+  "scope": "native load only; no model continuation or tool execution",
+  "version": "1.5.2",
+  "probe": "native-pi-rpc-from-agenthub-plan",
+  "original_id_confirmed": true,
+  "transcript_marker_seen": true,
+  "message_count": 2,
+  "model_called": false,
+  "status": "passed",
+  "source": "agy:93748d3b-ae91-447e-a184-c16dc21090c9",
+  "source_version": "1.5.6",
+  "assistant_reply_only": true,
+  "source_fixture_sha256": "f1c7e520b3ca2be1b31576690c1d1b7d5bb3b276bb06ff3a3d027060e76fa735",
+  "source_is_native_fixture": true
+}

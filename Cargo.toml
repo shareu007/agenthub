@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/adapters", "crates/index", "crates/cli"]
+members = ["crates/core", "crates/adapters", "crates/index", "crates/transfer", "crates/cli"]
 resolver = "2"
 
 [workspace.package]
@@ -12,6 +12,7 @@ license = "MIT"
 agenthub-core = { path = "crates/core" }
 agenthub-adapters = { path = "crates/adapters" }
 agenthub-index = { path = "crates/index" }
+agenthub-transfer = { path = "crates/transfer" }
 anyhow = "1"
 base64 = "0.22"
 blake3 = "1"
