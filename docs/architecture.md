@@ -89,3 +89,5 @@ Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell �
 Schema v2 为 sessions 增加 `size_bytes`、`display_title`。v1 首次打开时在事务内迁移，以已缓存 raw 的 UTF-8 字节数一次性补齐大小，不访问/重读原生来源，不丢弃离线会话。后续同步逐记录序列化一次，同时累计长度，不新增原文副本；大小排序与分页在 SQL 中完成。显示名是用户元数据，不受原生 upsert 覆盖；标题/项目 FTS 文档使用最终显示名，重命名与文档更新同一事务提交。
 
 原生扫描仍只读。CLI management 仅在明确删除确认后移除对应 JSONL 或调用 OpenCode 官方删除命令，验证成功后通过索引事务清理该会话及孤立来源；失败保留索引并解释原因。OpenCode 删除预检和结果检查复用 WAL-aware 私有快照，避免预览在原目录创建 SHM。无定时缓存清理、全库 VACUUM、软删除或后台任务。
+
+后续并发初始化、AGY 解码、输入内存和子进程清理修复见 [正确性与资源 review](review-correctness.md)。

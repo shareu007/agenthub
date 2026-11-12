@@ -208,6 +208,20 @@ def main():
                 (b'confirm transfer', b'\x1b'), (b'1-6 agent', b'q')])
             assert code == 0 and set(source.rglob('*.jsonl')) == before
             print(Path(binary).name+': all five tabs, >50-row counts, global body/Unicode search, search cancellation and transfer preview passed')
+        # Rename a title-only match away on the last search page: the selector
+        # must move back to the remaining matches instead of showing an empty page.
+        for sid in ['a', 'b', 'c']:
+            subprocess.run([binaries[0], '--config', str(config), 'rename', 'pi:'+sid, 'ALIAS_ONLY_MARKER'], check=True, capture_output=True)
+        code, output = terminal([binaries[0], '--config', str(config), 'list', '--agent', 'pi', '--limit', '1'], environment,
+            [(b'Enter: resume', b'/'), (b'Ctrl-U clear', b'ALIAS_ONLY_MARKER'),
+             (b'3 matches', b'\r'), (b'1-6 agent', b'n'), (b'offset 1', b'n'),
+             (b'offset 2', b'e'), (b'RENAME pi:a', b'\x15Different title'),
+             (b'Title: Different title', b'\r'), (b'Renamed pi:a', b'q')])
+        assert code == 0
+        final_rows = screen_rows(output)
+        assert b'offset 1' in final_rows[24] and b'2 matches' in final_rows[24], final_rows
+        for sid in ['a', 'b', 'c']:
+            subprocess.run([binaries[0], '--config', str(config), 'rename', 'pi:'+sid, '--reset'], check=True, capture_output=True)
         unavailable_env = dict(environment, PATH='')
         code, output = terminal([binaries[0], '--config', str(config), 'list', '--agent', 'pi'], unavailable_env,
             [(b'Enter: resume', b'\r'), (b'Cannot resume: native executable', b'q')])

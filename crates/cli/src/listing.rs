@@ -230,6 +230,19 @@ fn clip(text: &str, width: usize) -> String {
     out
 }
 
+fn append_input(input: &mut String, text: &str, limit: usize) {
+    let remaining = limit.saturating_sub(input.chars().count());
+    input.extend(
+        text.chars()
+            .filter_map(|c| match c {
+                '\n' | '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .take(remaining),
+    );
+}
+
 fn input_tail(text: &str, width: usize) -> String {
     let mut used = 0;
     let tail: Vec<char> = text
@@ -703,13 +716,13 @@ pub fn choose(
 
         let event = event::read()?;
         if let Event::Paste(text) = &event {
-            if let Some(Modal::Rename { input, .. } | Modal::Delete { input, .. }) = &mut modal {
-                input.push_str(&cell(text));
-                *input = input.chars().take(512).collect();
+            match &mut modal {
+                Some(Modal::Rename { input, .. }) => append_input(input, text, 512),
+                Some(Modal::Delete { input, .. }) => append_input(input, text, 16),
+                _ => {}
             }
             if let Some(input) = &mut draft {
-                input.push_str(&cell(text));
-                *input = input.chars().take(2048).collect();
+                append_input(input, text, 2048);
                 args.selection.offset = 0;
                 page = Page::load(store, &args, input)?;
                 selected = 0;
@@ -745,6 +758,13 @@ pub fn choose(
                     KeyCode::Enter => match store.rename(&key, Some(&input)) {
                         Ok(()) => {
                             page = Page::load(store, &args, &query)?;
+                            // Renaming can remove a title-only search match from
+                            // the last page. Return to a valid page like deletion.
+                            if page.records.is_empty() && args.selection.offset > 0 {
+                                args.selection.offset =
+                                    args.selection.offset.saturating_sub(args.selection.limit);
+                                page = Page::load(store, &args, &query)?;
+                            }
                             selected = selected.min(page.records.len().saturating_sub(1));
                             message = format!("Renamed {key}");
                         }
@@ -946,8 +966,7 @@ pub fn choose(
                     }
                     Event::Paste(text) => {
                         let input = draft.as_mut().expect("search input");
-                        input.push_str(&cell(&text));
-                        *input = input.chars().take(2048).collect();
+                        append_input(input, &text, 2048);
                     }
                     _ => {}
                 }
@@ -1087,5 +1106,22 @@ pub fn choose(
             top = 0;
             message.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    #[test]
+    fn paste_appends_only_remaining_sanitized_unicode_characters() {
+        let mut input = "已有".to_owned();
+        append_input(&mut input, "\x1b\n猫\t尾巴", 5);
+        assert_eq!(input, "已有 猫 ");
+        let huge = "界".repeat(1_000_000);
+        append_input(&mut input, &huge, 5);
+        assert_eq!(input, "已有 猫 ");
+        let mut empty = String::new();
+        append_input(&mut empty, &huge, 512);
+        assert_eq!(empty.chars().count(), 512);
     }
 }

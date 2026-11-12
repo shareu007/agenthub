@@ -247,3 +247,52 @@ fn schema_one_migrates_cached_bytes_without_source_access() {
     drop(store);
     assert_eq!(Store::open(&db).unwrap().find("pi:a").unwrap().session.title, "old");
 }
+
+#[test]
+fn concurrent_first_open_and_migration_are_idempotent() {
+    use std::sync::{Arc, Barrier};
+    for migrate in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("index.db");
+        if migrate {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            let old = include_str!("../src/schema.sql").replace(
+                ",\n    size_bytes INTEGER NOT NULL DEFAULT 0,\n    display_title TEXT", "");
+            conn.execute_batch(&old).unwrap();
+            conn.execute_batch("PRAGMA application_id=1095259458; PRAGMA user_version=1;").unwrap();
+        }
+        let barrier = Arc::new(Barrier::new(8));
+        let threads: Vec<_> = (0..8).map(|_| {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let store = Store::open(&db).unwrap();
+                assert!(store.list(&Filter::default()).unwrap().is_empty());
+            })
+        }).collect();
+        for thread in threads { thread.join().unwrap(); }
+    }
+}
+
+#[test]
+fn agy_decoder_upgrade_does_not_reparse_unchanged_other_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("agy");
+    fs::create_dir_all(root.join("conversations")).unwrap();
+    let (summary, conversation) = include_str!("../../../tests/fixtures/agy/1.5.6.sql")
+        .split_once("-- CONVERSATION_DB: 93748d3b-ae91-447e-a184-c16dc21090c9.db\n").unwrap();
+    rusqlite::Connection::open(root.join("conversation_summaries.db")).unwrap().execute_batch(summary).unwrap();
+    rusqlite::Connection::open(root.join("conversations/93748d3b-ae91-447e-a184-c16dc21090c9.db")).unwrap().execute_batch(conversation).unwrap();
+    let db = dir.path().join("index.db");
+    let mut store = Store::open(&db).unwrap();
+    let agy = adapter(Agent::Agy, root);
+    transcript(&dir.path().join("pi/a.jsonl"), "unchanged Pi");
+    let pi = adapter(Agent::Pi, dir.path().join("pi"));
+    store.sync(pi.as_ref(), false).unwrap();
+    store.sync(agy.as_ref(), false).unwrap();
+    rusqlite::Connection::open(&db).unwrap().execute("UPDATE sources SET parser_version=2 WHERE agent='agy'", []).unwrap();
+    assert_eq!(store.sync(agy.as_ref(), false).unwrap().indexed, 1);
+    assert_eq!(store.sync(agy.as_ref(), false).unwrap().unchanged, 1);
+    assert_eq!(store.sync(pi.as_ref(), false).unwrap().unchanged, 1);
+}

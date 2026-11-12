@@ -68,7 +68,7 @@ impl Adapter for AgyAdapter {
                 let decoded = (|| -> Result<_> {
                     let time = protobuf::integer_at(&payload, &[5,1,1])?.and_then(|v| i64::try_from(v).ok()).and_then(|v| v.checked_mul(1000));
                     let (role, text) = match kind {
-                        14 => ("user", protobuf::text_at(&payload, &[19,2])?.or(protobuf::text_at(&payload, &[19,3,1])?).context("unknown AGY user input encoding")?),
+                        14 => ("user", preferred_text(&payload, &[19,2], &[19,3,1])?.context("unknown AGY user input encoding")?),
                         15 => ("assistant", assistant_text(&payload)?),
                         _ => {
                             // Non-chat steps are a schema-neutral wire tree, including tool inputs/results.
@@ -116,12 +116,19 @@ pub fn agy_assistant_reply(raw: &Value) -> Result<Option<String>> {
     protobuf::text_at(&payload, &[20,1])
 }
 
+fn preferred_text(payload: &[u8], primary: &[u32], fallback: &[u32]) -> Result<Option<String>> {
+    match protobuf::text_at(payload, primary)? {
+        Some(text) => Ok(Some(text)),
+        None => protobuf::text_at(payload, fallback),
+    }
+}
+
 fn assistant_text(payload: &[u8]) -> Result<String> {
     let mut parts = Vec::new();
     if let Some(thinking) = protobuf::text_at(payload, &[20, 3])?.filter(|s| !s.is_empty()) {
         parts.push(thinking);
     }
-    if let Some(reply) = protobuf::text_at(payload, &[20, 8])?.or(protobuf::text_at(payload, &[20, 1])?).filter(|s| !s.is_empty()) {
+    if let Some(reply) = preferred_text(payload, &[20,8], &[20,1])?.filter(|s| !s.is_empty()) {
         parts.push(reply);
     }
     if let Some(body) = protobuf::bytes_at(payload, &[20])? {
@@ -165,5 +172,18 @@ mod tests {
         assert_eq!(file_uri("file://localhost/tmp/a"), Some(PathBuf::from("/tmp/a")));
         assert_eq!(file_uri("file://remote/tmp/a"), None);
         assert_eq!(file_uri("file:///tmp/%00"), None);
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    #[test]
+    fn valid_reply_does_not_decode_invalid_legacy_fallback() {
+        // step.20 contains valid .8 text and an invalid UTF-8 legacy .1 field.
+        let payload = [0xa2, 0x01, 7, 0x42, 2, b'o', b'k', 0x0a, 1, 0xff];
+        assert_eq!(assistant_text(&payload).unwrap(), "ok");
+        assert_eq!(preferred_text(&[10,2,b'h',b'i'], &[2], &[1]).unwrap().as_deref(), Some("hi"));
+        assert!(preferred_text(&[10,1,0xff], &[1], &[2]).is_err());
     }
 }

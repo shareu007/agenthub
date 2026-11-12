@@ -102,26 +102,21 @@ impl Store {
         }
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(3))?;
-        let id: i64 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
-        if id != APP_ID && (id != 0 || tables != 0 || version != 0) {
-            bail!("refusing to use a non-AgentHub database as the index: {}", path.display());
-        }
-        if version > SCHEMA_VERSION { bail!("index schema {version} is newer than supported {SCHEMA_VERSION}"); }
+        let version = check_identity(&conn, path)?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-4096;")?;
-        if version == 0 {
+        if version < SCHEMA_VERSION {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            tx.execute_batch(include_str!("schema.sql"))?;
-            tx.pragma_update(None, "application_id", APP_ID)?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            tx.commit()?;
-        }
-        if version == 1 {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            tx.execute_batch("ALTER TABLE sessions ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE sessions ADD COLUMN display_title TEXT;
-                UPDATE sessions SET size_bytes=coalesce((SELECT sum(length(CAST(raw AS BLOB))) FROM messages WHERE session_key=sessions.key),0);")?;
+            // Another process can finish initialization/migration while we wait
+            // for the write lock. Recheck inside the transaction, not before it.
+            let version = check_identity(&tx, path)?;
+            if version == 0 {
+                tx.execute_batch(include_str!("schema.sql"))?;
+                tx.pragma_update(None, "application_id", APP_ID)?;
+            } else if version == 1 {
+                tx.execute_batch("ALTER TABLE sessions ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE sessions ADD COLUMN display_title TEXT;
+                    UPDATE sessions SET size_bytes=coalesce((SELECT sum(length(CAST(raw AS BLOB))) FROM messages WHERE session_key=sessions.key),0);")?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
@@ -144,7 +139,7 @@ impl Store {
                     "SELECT fingerprint,parser_version,present FROM sources WHERE id=?1", [&id],
                     |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
                 ).optional()?;
-                if !force && previous.is_some_and(|(f,v,p)| f == fingerprint && v == PARSER_VERSION && p) {
+                if !force && previous.is_some_and(|(f,v,p)| f == fingerprint && v == parser_version(adapter.agent()) && p) {
                     report.unchanged += 1;
                     return Ok(());
                 }
@@ -175,7 +170,7 @@ impl Store {
     fn ingest(&mut self, adapter: &dyn Adapter, source: &Source, id: &str, fingerprint: &str, root: &str) -> Result<()> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO sources(id,agent,root,path,fingerprint,parser_version,present,synced_at) VALUES(?1,?2,?3,?4,?5,?6,1,?7) ON CONFLICT(id) DO UPDATE SET root=excluded.root,fingerprint=excluded.fingerprint,parser_version=excluded.parser_version,present=1,synced_at=excluded.synced_at",
-            params![id,source.agent.as_str(),root,path_text(&source.path)?,fingerprint,PARSER_VERSION,chrono::Utc::now().timestamp_millis()])?;
+            params![id,source.agent.as_str(),root,path_text(&source.path)?,fingerprint,parser_version(source.agent),chrono::Utc::now().timestamp_millis()])?;
         tx.execute("UPDATE sessions SET available=0 WHERE source_id=?1", [id])?;
         {
             let mut writer = Writer { tx: &tx, source_id: id, current: None, count: 0, size: 0 };
@@ -294,6 +289,23 @@ impl Store {
     pub fn source_root(&self, key: &str) -> Result<PathBuf> {
         Ok(PathBuf::from(self.conn.query_row("SELECT root FROM sources JOIN sessions ON sources.id=sessions.source_id WHERE sessions.key=?1", [key], |r| r.get::<_,String>(0))?))
     }
+}
+
+fn check_identity(conn: &Connection, path: &Path) -> Result<i64> {
+    // One statement observes a consistent schema/header snapshot during upgrades.
+    let (id, version, tables): (i64, i64, i64) = conn.query_row(
+        "SELECT (SELECT application_id FROM pragma_application_id),(SELECT user_version FROM pragma_user_version),(SELECT count(*) FROM sqlite_master)",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    if id != APP_ID && (id != 0 || tables != 0 || version != 0) {
+        bail!("refusing to use a non-AgentHub database as the index: {}", path.display());
+    }
+    if version > SCHEMA_VERSION { bail!("index schema {version} is newer than supported {SCHEMA_VERSION}"); }
+    Ok(version)
+}
+
+fn parser_version(agent: Agent) -> i64 {
+    // Only AGY requires reindexing for the lazy fallback decoding fix.
+    if agent == Agent::Agy { 3 } else { PARSER_VERSION }
 }
 
 fn ordering(order: ListOrder) -> String {

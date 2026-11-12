@@ -586,23 +586,20 @@ fn bounded_command_with_limits(
         .stderr(Stdio::from(log.try_clone()?))
         .spawn()
         .context("start native command")?;
-    let mut child = NativeProcess {
-        child,
-        complete: false,
-    };
+    let mut child = NativeProcess { child };
     let start = Instant::now();
     let status = loop {
         if start.elapsed() >= timeout || log.metadata()?.len() > log_limit {
             bail!("native command timed out or exceeded log limit; check native sessions before retrying");
         }
         if let Some(status) = child.child.try_wait()? {
-            if status.success() {
-                child.complete = true;
-            }
             break status;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
+    if log.metadata()?.len() > log_limit {
+        bail!("native command exceeded log limit; check native sessions before retrying");
+    }
     if !status.success() {
         bail!(
             "native command failed; inspect native sessions before retrying"
@@ -622,19 +619,18 @@ fn bounded_command_with_limits(
 // a user's already-running native agent or unrelated terminal process group.
 struct NativeProcess {
     child: std::process::Child,
-    complete: bool,
 }
 impl Drop for NativeProcess {
     fn drop(&mut self) {
-        if !self.complete {
-            #[cfg(unix)]
-            // SAFETY: spawn used process_group(0); this is our child's group.
-            unsafe {
-                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
-            }
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        // Metadata commands must not leave helpers running, even when their
+        // direct parent exits successfully. This is our isolated process group.
+        #[cfg(unix)]
+        // SAFETY: spawn used process_group(0); this is our child's group.
+        unsafe {
+            libc::kill(-(self.child.id() as i32), libc::SIGKILL);
         }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -668,5 +664,28 @@ mod process_tests {
             4096,
         );
         assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod helper_cleanup_tests {
+    use super::*;
+    #[test]
+    fn successful_parent_does_not_leave_its_helper_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        run_native_command(Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 20 & echo $! > \"$AH_HELPER_PID\"; exit 0"])
+            .env("AH_HELPER_PID", &pid_file)).unwrap();
+        let pid = fs::read_to_string(pid_file).unwrap();
+        let stat = format!("/proc/{}/stat", pid.trim());
+        for _ in 0..50 {
+            let running = fs::read_to_string(&stat).ok().is_some_and(|s| {
+                !s.split_once(") ").is_some_and(|(_, tail)| tail.starts_with('Z'))
+            });
+            if !running { return; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("background helper survived successful parent exit");
     }
 }
