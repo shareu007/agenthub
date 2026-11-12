@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import sqlite3
@@ -63,6 +64,14 @@ def terminal(command, environment, actions, size=(26, 110)):
             process.wait()
         os.close(master)
         os.close(slave)
+
+
+def screen_rows(output):
+    # Crossterm addresses rows explicitly. Strip SGR/control sequences so tests
+    # verify actual label placement rather than merely finding all labels somewhere.
+    parts = re.split(rb'\x1b\[(\d+);1H', output)
+    return {int(parts[i]): re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', parts[i+1])
+            for i in range(1, len(parts)-1, 2)}
 
 
 def main():
@@ -147,6 +156,23 @@ def main():
             assert code == 0 and b'Hidden Codex' in output
             for label in [b'1 Claude:1', b'2 Codex:1', b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']:
                 assert label in output, (label, output)
+            labels = [b'0 All:66', b'1 Claude:1', b'2 Codex:1',
+                      b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']
+            # All tabs fit naturally on one line at 80 columns. At 50 columns,
+            # wrapping follows label width, so four tabs fit on the first line.
+            for columns, expected_lines in [(110, 1), (80, 1), (50, 2)]:
+                code, layout = terminal(base, environment, [(b'Enter: resume', b'q')], size=(26, columns))
+                displayed = screen_rows(layout)
+                assert code == 0
+                tabs = [line for row, line in sorted(displayed.items()) if 2 <= row < 2+expected_lines]
+                assert len(tabs) == expected_lines
+                assert all(any(label in line for line in tabs) for label in labels), (columns, tabs)
+                assert b'Group:' in displayed[2+expected_lines]
+                assert all(len(line) < columns for line in tabs), (columns, tabs)
+                if expected_lines == 1:
+                    assert b'  '.join(labels) == tabs[0], tabs
+                else:
+                    assert b'3 OpenCode:1' in tabs[0] and b'4 Pi:3' in tabs[1], tabs
             # Important headings and the selected row receive explicit styles.
             assert b'\x1b[1m' in output and b'\x1b[1;7m' in output
             assert b'\x1b[1;97;44m' not in output and b'\x1b[1;30;46m' not in output

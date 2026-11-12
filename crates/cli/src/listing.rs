@@ -283,27 +283,35 @@ const AGENTS: [Option<Agent>; 6] = [
 ];
 const LABELS: [&str; 6] = ["All", "Claude", "Codex", "OpenCode", "Pi", "AGY"];
 
-fn agent_bar(
-    page: &Page,
-    selected: Option<Agent>,
-    range: std::ops::Range<usize>,
-    width: usize,
-    ui: &Ui,
-) -> String {
-    // Keep a two-space gap instead of stretching tabs across the terminal.
-    // Cap each item on narrow screens so all categories remain reachable.
-    let slot = width / range.len();
-    range
-        .map(|i| {
-            let label = format!("{} {}:{}", i, LABELS[i], page.total(AGENTS[i]));
-            let text = padded(&label, (label.len() + 2).min(slot));
-            if AGENTS[i] == selected {
-                ui.selected(&text)
-            } else {
-                ui.heading(&text)
-            }
-        })
-        .collect()
+fn agent_bars(page: &Page, selected: Option<Agent>, width: usize, ui: &Ui) -> Vec<String> {
+    // Pack complete labels with a two-space gap; wrap only when the next label
+    // would exceed the actual terminal width, not after a fixed agent count.
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut used = 0;
+    for i in 0..AGENTS.len() {
+        let label = clip(
+            &format!("{} {}:{}", i, LABELS[i], page.total(AGENTS[i])),
+            width,
+        );
+        let length = label.len(); // Agent labels and decimal counts are ASCII.
+        if used > 0 && used + 2 + length > width {
+            lines.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        if used > 0 {
+            line.push_str("  ");
+            used += 2;
+        }
+        line.push_str(&if AGENTS[i] == selected {
+            ui.selected(&label)
+        } else {
+            ui.heading(&label)
+        });
+        used += length;
+    }
+    lines.push(line);
+    lines
 }
 
 #[derive(Clone)]
@@ -458,7 +466,9 @@ pub fn choose(
     loop {
         let (width, height) = terminal::size()?;
         let width = width.saturating_sub(1) as usize;
-        if height < 10 || width < 35 {
+        let bars = agent_bars(&page, args.selection.agent, width, ui);
+        let content_top = bars.len() as u16 + 3;
+        if height < 10 || width < 35 || height <= content_top + 4 {
             let mut out = io::stdout().lock();
             execute!(out, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
             at(
@@ -479,7 +489,7 @@ pub fn choose(
                 _ => continue,
             }
         }
-        let visible = height.saturating_sub(9) as usize;
+        let visible = usize::from(height - content_top - 4);
         let rows = rows(&page.records, args.group_by);
         let position = rows
             .iter()
@@ -498,19 +508,12 @@ pub fn choose(
             0,
             &ui.bar(&padded(" AgentHub  / Sessions", width)),
         )?;
+        for (i, bar) in bars.iter().enumerate() {
+            at(&mut out, 1 + i as u16, bar)?;
+        }
         at(
             &mut out,
-            1,
-            &agent_bar(&page, args.selection.agent, 0..3, width, ui),
-        )?;
-        at(
-            &mut out,
-            2,
-            &agent_bar(&page, args.selection.agent, 3..6, width, ui),
-        )?;
-        at(
-            &mut out,
-            3,
+            content_top - 2,
             &ui.dim(&padded(
                 &format!(
                     "Group: {:?} [g]  Sort: {:?}{} [s/r]  agent={} [0-5/Tab/Left/Right]",
@@ -526,7 +529,7 @@ pub fn choose(
             )),
         )?;
         let heading = prefix(" ", "UPDATED (UTC)", "AGENT", "PROJECT", "SIZE", width) + "TITLE";
-        at(&mut out, 4, &ui.bar(&padded(&heading, width)))?;
+        at(&mut out, content_top - 1, &ui.bar(&padded(&heading, width)))?;
         for (i, row) in rows.iter().skip(top).take(visible).enumerate() {
             let text = match row {
                 Row::Group(name) => ui.heading(&padded(&format!("── {name} ──"), width)),
@@ -538,12 +541,12 @@ pub fn choose(
                     ui,
                 ),
             };
-            at(&mut out, 5 + i as u16, &text)?;
+            at(&mut out, content_top + i as u16, &text)?;
         }
         if page.records.is_empty() {
             at(
                 &mut out,
-                5,
+                content_top,
                 &ui.title(&padded(
                     "No matching indexed sessions. Clear search/change Agent, or run ah sync.",
                     width,
@@ -551,7 +554,7 @@ pub fn choose(
             )?;
         }
         if let Some(state) = &modal {
-            for row in 5..height - 4 {
+            for row in content_top..height - 4 {
                 at(&mut out, row, &padded("", width))?;
             }
             let details = match state {
@@ -591,7 +594,11 @@ pub fn choose(
                 ],
             };
             for (i, line) in details.iter().take(visible).enumerate() {
-                at(&mut out, 5 + i as u16, &ui.title(&padded(line, width)))?;
+                at(
+                    &mut out,
+                    content_top + i as u16,
+                    &ui.title(&padded(line, width)),
+                )?;
             }
         }
         let detail = page
@@ -685,7 +692,7 @@ pub fn choose(
             if visible >= 4 {
                 queue!(
                     out,
-                    cursor::MoveTo(column.min(width.saturating_sub(1)) as u16, 8),
+                    cursor::MoveTo(column.min(width.saturating_sub(1)) as u16, content_top + 3),
                     cursor::Show
                 )?;
             } else {
@@ -724,13 +731,13 @@ pub fn choose(
         }
         if let Some(state) = modal.take() {
             let modifiers = key.modifiers;
-            if (height < 16 || width < 59)
+            if (visible < 7 || width < 59)
                 && (key.code == KeyCode::Enter
                     || matches!((&state, key.code), (Modal::Preview(_), KeyCode::Char('y'))))
             {
                 modal = Some(state);
-                message =
-                    "Resize terminal to at least 60x16 to review and confirm this action.".into();
+                message = "Resize terminal to show the full action: 60 columns and 7 content rows."
+                    .into();
                 continue;
             }
             match (state, key.code) {
@@ -776,7 +783,7 @@ pub fn choose(
                     },
                     code,
                 ) => {
-                    if code == KeyCode::Enter && input == "DELETE" && height >= 16 && width >= 59 {
+                    if code == KeyCode::Enter && input == "DELETE" && visible >= 7 && width >= 59 {
                         let mut progress = io::stdout().lock();
                         at(
                             &mut progress,
@@ -843,7 +850,7 @@ pub fn choose(
                         }
                     }
                 }
-                (Modal::Preview(plan), KeyCode::Char('y')) if height >= 16 && width >= 59 => {
+                (Modal::Preview(plan), KeyCode::Char('y')) if visible >= 7 && width >= 59 => {
                     let mut progress = io::stdout().lock();
                     at(
                         &mut progress,
@@ -891,9 +898,9 @@ pub fn choose(
                 }
                 (state, _) => {
                     modal = Some(state);
-                    if height < 16 || width < 59 {
+                    if visible < 7 || width < 59 {
                         message =
-                            "Resize terminal to at least 60x16 to review and confirm transfer."
+                            "Resize terminal to show the full transfer: 60 columns and 7 content rows."
                                 .into();
                     }
                 }
