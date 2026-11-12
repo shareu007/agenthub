@@ -27,4 +27,13 @@ with sqlite3.connect(':memory:') as db:
         raise RuntimeError('OpenCode native fixture violates database integrity')
     if db.execute('SELECT count(*) FROM session').fetchone()[0] != 1 or db.execute('SELECT count(*) FROM message').fetchone()[0] != 1:
         raise RuntimeError('OpenCode controlled fixture should contain one session and one message')
+summary_sql, conversation_sql = (ROOT/matrix['agents']['agy']['fixture']).read_text().split(
+    '-- CONVERSATION_DB: 93748d3b-ae91-447e-a184-c16dc21090c9.db\n', 1)
+with sqlite3.connect(':memory:') as summary_db, sqlite3.connect(':memory:') as conversation_db:
+    summary_db.executescript(summary_sql)
+    conversation_db.executescript(conversation_sql)
+    if summary_db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or conversation_db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+        raise RuntimeError('AGY native fixture violates database integrity')
+    if summary_db.execute('SELECT count(*) FROM conversation_summaries').fetchone()[0] != 1 or conversation_db.execute('SELECT count(*) FROM steps').fetchone()[0] != 4:
+        raise RuntimeError('AGY controlled fixture should contain one summary row and four steps')
 print('Available native fixtures verified. This does not certify missing fixtures or native recovery.')

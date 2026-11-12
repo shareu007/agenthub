@@ -216,3 +216,38 @@ fn opencode_1_19_5_native_api_fixture_keeps_stored_user_message() {
     assert_eq!(fs::read(&path).unwrap(), before);
     assert!(!dir.path().join("opencode.db-shm").exists());
 }
+
+#[test]
+fn agy_1_5_6_native_cli_fixture_preserves_steps_and_tool_call() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("conversations")).unwrap();
+    let (summary_sql, conv_sql) = include_str!("../../../tests/fixtures/agy/1.5.6.sql")
+        .split_once("-- CONVERSATION_DB: 93748d3b-ae91-447e-a184-c16dc21090c9.db\n").unwrap();
+    let summary_path = dir.path().join("conversation_summaries.db");
+    let conv_path = dir.path().join("conversations/93748d3b-ae91-447e-a184-c16dc21090c9.db");
+    Connection::open(&summary_path).unwrap().execute_batch(summary_sql).unwrap();
+    Connection::open(&conv_path).unwrap().execute_batch(conv_sql).unwrap();
+    let summary_before = fs::read(&summary_path).unwrap();
+    let conv_before = fs::read(&conv_path).unwrap();
+    let a = adapter(Agent::Agy, dir.path().into());
+    let source = a.discover().unwrap().sources.remove(0);
+    let mut capture = Capture::default();
+    a.read(&source, &mut capture).unwrap();
+    assert_eq!(capture.sessions[0].native_id, "93748d3b-ae91-447e-a184-c16dc21090c9");
+    assert_eq!(capture.sessions[0].project_path.as_deref(), Some(Path::new("/tmp/agenthub-fixture-project")));
+    assert!(!capture.sessions[0].warnings.iter().any(|w| w.contains("unsupported")));
+    assert_eq!(capture.messages.len(), 4);
+    assert_eq!(capture.messages[0].role, "user");
+    assert!(capture.messages[0].text.contains("AH_FIXTURE_20261112"));
+    assert_eq!(capture.messages[1].role, "assistant");
+    assert!(capture.messages[1].text.contains("Inspecting fixture file") && capture.messages[1].text.contains("read_file"));
+    assert_eq!(capture.messages[2].role, "tool");
+    assert_eq!(capture.messages[2].kind, "agy_step_132");
+    assert!(capture.messages[2].text.contains("AgentHub AGY fixture file"));
+    assert_eq!(capture.messages[3].role, "assistant");
+    assert!(capture.messages[3].text.contains("AH_FIXTURE_20261112"));
+    assert_eq!(fs::read(&summary_path).unwrap(), summary_before);
+    assert_eq!(fs::read(&conv_path).unwrap(), conv_before);
+    assert!(!dir.path().join("conversation_summaries.db-shm").exists());
+    assert!(!dir.path().join("conversations/93748d3b-ae91-447e-a184-c16dc21090c9.db-shm").exists());
+}

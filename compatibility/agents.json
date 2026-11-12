@@ -3,11 +3,12 @@
   "platform": "linux-x86_64-glibc",
   "agents": {
     "agy": {
-      "version": null,
-      "distribution": "https://antigravity.google/docs/cli/using/",
-      "status": "blocked",
-      "reason": "No installed CLI, verified distribution/version or real sample; official docs denied by current runtime network policy",
-      "fixture": null
+      "version": "1.5.6",
+      "distribution": "https://antigravity.google/cli/install.sh",
+      "status": "native-terminal-load",
+      "reason": "Native AGY CLI writer with controlled local Gemini SSE endpoint stored user, thinking/tool_call, tool, and assistant steps; AgentHub resume --exec displayed marker in real AGY terminal; no remote model called",
+      "fixture": "tests/fixtures/agy/1.5.6.sql",
+      "fixture_sha256": "f1c7e520b3ca2be1b31576690c1d1b7d5bb3b276bb06ff3a3d027060e76fa735"
     },
     "claude": {
       "version": "2.1.322",

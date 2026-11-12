@@ -69,7 +69,7 @@ impl Adapter for AgyAdapter {
                     let time = protobuf::integer_at(&payload, &[5,1,1])?.and_then(|v| i64::try_from(v).ok()).and_then(|v| v.checked_mul(1000));
                     let (role, text) = match kind {
                         14 => ("user", protobuf::text_at(&payload, &[19,2])?.or(protobuf::text_at(&payload, &[19,3,1])?).context("unknown AGY user input encoding")?),
-                        15 => ("assistant", protobuf::text_at(&payload, &[20,8])?.or(protobuf::text_at(&payload, &[20,1])?).context("unknown AGY assistant encoding")?),
+                        15 => ("assistant", assistant_text(&payload)?),
                         _ => {
                             // Non-chat steps are a schema-neutral wire tree, including tool inputs/results.
                             let mut values = Vec::new();
@@ -101,6 +101,28 @@ impl Adapter for AgyAdapter {
         if session.title.is_empty() { session.title = session.native_id.clone(); }
         sink.finish(&session)
     }
+}
+
+fn assistant_text(payload: &[u8]) -> Result<String> {
+    let mut parts = Vec::new();
+    if let Some(thinking) = protobuf::text_at(payload, &[20, 3])?.filter(|s| !s.is_empty()) {
+        parts.push(thinking);
+    }
+    if let Some(reply) = protobuf::text_at(payload, &[20, 8])?.or(protobuf::text_at(payload, &[20, 1])?).filter(|s| !s.is_empty()) {
+        parts.push(reply);
+    }
+    if let Some(body) = protobuf::bytes_at(payload, &[20])? {
+        for (field, value) in protobuf::fields(body)? {
+            if field == 7 {
+                if let protobuf::Wire::Bytes(call) = value {
+                    let name = protobuf::text_at(call, &[2])?.context("missing AGY tool call name")?;
+                    parts.push(json!({"id": protobuf::text_at(call, &[1])?, "name": name, "arguments": protobuf::text_at(call, &[3])?}).to_string());
+                }
+            }
+        }
+    }
+    anyhow::ensure!(!parts.is_empty(), "unknown AGY assistant encoding");
+    Ok(parts.join("\n"))
 }
 
 /// Local file URI only, percent-decoded without normalizing case or symlinks.

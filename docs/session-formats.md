@@ -1,6 +1,6 @@
 # Session 存储格式调查
 
-结构调查记录日期：2026-11-12。下文保留历史格式分析，旧“本机观测”未全部复现，不能作为当前版本验收证明。当前实际安装版本、原生写出样本与恢复证据以 [兼容性矩阵](compatibility.md) 为准：Pi 1.5.2、OpenCode 1.19.5 已有受控原生样本和恢复加载验证，Claude 2.1.322 与 Codex 0.167.0-alpha.4 仅核实安装版本，AGY 版本/真实格式仍待核实。没有复制私人对话、认证文件或专有程序二进制进仓库；既有内联夹具仍是合成数据。
+结构调查记录日期：2026-11-12。下文保留历史格式分析，旧“本机观测”未全部复现，不能作为当前版本验收证明。当前实际安装版本、原生写出样本与恢复证据以 [兼容性矩阵](compatibility.md) 为准：AGY 1.5.6、Pi 1.5.2、OpenCode 1.19.5 已有受控原生样本和恢复加载验证，Claude 2.1.322 与 Codex 0.167.0-alpha.4 仅核实安装版本。没有复制私人对话、认证文件或专有程序二进制进仓库；既有内联夹具仍是合成数据。
 
 ## Claude Code
 
@@ -38,14 +38,14 @@
 
 ## Google Antigravity CLI（agy）
 
-- 官方：[会话管理](https://antigravity.google/docs/cli/conversations)、[CLI 参数](https://antigravity.google/docs/cli/reference)、[设置](https://antigravity.google/docs/cli/using/)、[更新记录](https://antigravity.google/docs/changelog)。官方文档确认 workspace scope 与 `--conversation`；未发布稳定磁盘 schema。
-- 历史调查记录的 CLI 存储根（待真实版本复核）是 `~/.gemini/antigravity-cli`，而非旧 Antigravity IDE 的 `.pb` 文件目录，也不是 Gemini CLI 的 JSON chats。
-- 汇总库：`conversation_summaries.db`，`conversation_summaries` 表，字段有 `conversation_id/title/preview/workspace_uris/last_modified_time/parent_conversation_id/...`。另有内部 FTS 表；AgentHub 不借用其可能不完整的搜索正文来冒充完整对话。
-- 每会话库：`conversations/<id>.db`。历史记录中的 `steps` 表包含 `idx/step_type/status/has_subtrajectory/metadata/error_details/permissions/task_details/render_info/step_payload/step_format`，并存在 `trajectory_meta`、`gen_metadata`、`executor_metadata`、`parent_references`、`trajectory_metadata_blob`、`battle_mode_infos`。
-- 历史记录的 `step_format=0` payload 是包含步骤类型、metadata 和 oneof 内容的完整 Protobuf wire message。用户步骤类型 14 的文本路径是 `19.2`（回退 `19.3.1`）；助手步骤 15 的显示文本路径是 `20.8`（回退 `20.1`）；步骤创建秒时间来自 `5.1.1`。这些路径是本机观测，不是 Google 提供的兼容性承诺。
-- 实现：按 idx 读取全部 steps；解码已核实的用户/助手路径，其他步骤展示有字段号的 wire tree，并保留所有原 step payload 及相关步骤列的 Base64。未知 step_format、损坏 protobuf 或缺失已知文本字段标记 opaque 和 warning。侧表中的附件/轨迹不展开；不能宣称所有工具步骤已转换为统一语义对象，也不包含上游未保存在 steps 中的内容。
+- 官方：[快速开始](https://antigravity.google/docs/getting-started/)、[会话管理](https://antigravity.google/docs/cli/conversations)、[CLI 参数](https://antigravity.google/docs/cli/reference)、[设置](https://antigravity.google/docs/cli/using/)、[更新记录](https://antigravity.google/docs/changelog)。当前原生样本来自官方安装脚本安装的 `agy 1.5.6`。官方文档确认 workspace scope 与 `--conversation`；未发布稳定磁盘 schema。
+- CLI 存储根是 `~/.gemini/antigravity-cli`，而非旧 Antigravity IDE 的 `.pb` 文件目录，也不是 Gemini CLI 的 JSON chats。
+- 汇总库：`conversation_summaries.db`，`conversation_summaries` 表，字段有 `conversation_id/title/preview/workspace_uris/last_modified_time/parent_conversation_id/...`。另有内部 FTS5 表 `conversations_fts`；AgentHub 不借用其可能不完整的搜索正文来冒充完整对话。
+- 每会话库：`conversations/<id>.db`。`steps` 表包含 `idx/step_type/status/has_subtrajectory/metadata/error_details/permissions/task_details/render_info/step_payload/step_format`，并存在 `trajectory_meta`、`gen_metadata`、`executor_metadata`、`parent_references`、`trajectory_metadata_blob`、`battle_mode_infos`。
+- `step_format=0` payload 是包含步骤类型、metadata 和 oneof 内容的完整 Protobuf wire message。用户步骤类型 14 的文本路径是 `19.2`（回退 `19.3.1`）；助手步骤 15 的思考文本路径是 `20.3`、显示文本路径是 `20.8`（回退 `20.1`）、工具调用重复出现在 `20.7`（`1`=id、`2`=name、`3`=arguments JSON）；步骤创建秒时间来自 `5.1.1`。这些路径基于 `agy 1.5.6` 实测，不是 Google 提供的兼容性承诺。
+- 实现：按 idx 读取全部 steps；解码已核实的用户/助手（含思考与工具调用）路径，工具执行等其他步骤（如 `read_file` 对应的 `step_type=132`）展示 `field > 5` 的 wire tree，并保留所有原 step payload 及相关步骤列的 Base64。未知 step_format、损坏 protobuf 或缺失已知字段标记 opaque 和 warning。侧表中的附件/轨迹不展开；不能宣称所有工具步骤已转换为统一语义对象，也不包含上游未保存在 steps 中的内容。
 - `workspace_uris` 解析本地 `file:///...` 和 `file://localhost/...`，按 UTF-8 percent decoding 还原路径；不把远程 URI 当成本地工作目录。
-- 恢复：`agy --conversation <id>`，在原项目目录启动。未查证可覆盖存储根的原生参数，因此自定义 AGY 来源只提供索引/读取，恢复入口明确报错。
+- 恢复：`agy --conversation <id>`，在原项目目录启动。顶层 `agy` 实测不接受 `--gemini-dir`/`--app-data-dir`（仅 `agy acp` 支持），因此自定义 AGY 来源只提供索引/读取，恢复入口明确报错。
 
 ## 安全降级与升级策略
 
