@@ -13,8 +13,7 @@ mod management;
 use ui::{cell, safe, Ui};
 
 #[derive(Parser)]
-#[command(name="agenthub", version, about="Find, read, and resume your coding-agent sessions",
-    long_about="A local session index for Claude Code, Codex, OpenCode, Pi, and AGY. Source discovery is read-only; transfer creates a new native session.\nRuns on demand on Linux and macOS. Run without a subcommand to browse sessions. Press Enter to resume, or use resume --exec.",
+#[command(name="agenthub", version, about="Manage coding-agent sessions in one place.",
     after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  ah\n  agenthub list --agent codex --group-by project --sort time\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  ah transfer codex:SESSION_ID --to pi --dry-run\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
 struct Cli {
     /// Index path; never point this at an agent database.
