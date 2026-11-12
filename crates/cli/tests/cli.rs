@@ -117,9 +117,18 @@ fn help_gives_a_workflow_without_accessing_configuration() {
 
 #[test]
 fn both_names_default_to_list_and_help_stays_explicit() {
-    let (_dir, config) = fixture();
+    let (dir, config) = fixture();
+    // Alphabetical agent grouping would put this older Codex session before Pi.
+    let source = dir.path().join("codex/sessions");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("older.jsonl"), "{\"type\":\"session_meta\",\"timestamp\":\"2025-01-01T00:00:00Z\",\"payload\":{\"id\":\"older\",\"cwd\":\"/tmp\"}}\n").unwrap();
     assert!(run(&config, &["sync","--include-unavailable"]).status.success());
     let explicit = run(&config, &["list", "--json"]);
+    let records: Vec<serde_json::Value> = serde_json::from_slice(&explicit.stdout).unwrap();
+    assert_eq!(records.iter().map(|r| r["key"].as_str().unwrap()).collect::<Vec<_>>(), ["pi:ui", "codex:older"]);
+    for group in ["time", "none"] {
+        assert_eq!(run(&config, &["list", "--group-by", group, "--json"]).stdout, explicit.stdout);
+    }
     for binary in [env!("CARGO_BIN_EXE_agenthub"), env!("CARGO_BIN_EXE_ah")] {
         let result = Command::new(binary).arg("--config").arg(&config).arg("--json").output().unwrap();
         assert!(result.status.success());

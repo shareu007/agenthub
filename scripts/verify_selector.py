@@ -121,7 +121,8 @@ def main():
                 code, _ = terminal(base, environment, [(b'Enter: resume', quit_key)])
                 assert code == 0 and not result_file.exists()
             code, _ = terminal(base+['list', '--limit', '2'], environment, [
-                (b'Enter: resume', b'g'), (b'Group: Project', b's'),
+                (b'Enter: resume', b'g'), (b'Group: Agent', b'g'),
+                (b'Group: Project', b'g'), (b'Group: Time', b's'),
                 (b'Sort: Created', b'r'), (b'reversed', b'n'),
                 (b'offset 2', b'p'), (b'offset 0', b'q')])
             assert code == 0
@@ -136,8 +137,8 @@ def main():
             assert code == 0 and not result_file.exists()
             (source/'b.hidden').rename(source/'b.jsonl')
             print(Path(binary).name+': selection, exec, terminal restore, quit, grouping, sorting, paging, JSON and source failure passed')
-        # Synthetic index rows deliberately fill the first 50 results with AGY.
-        # Other Agent tabs and body search must still reach all matching sessions.
+        # Synthetic rows exceed the first 50 results; Agent tabs and body search
+        # must still reach sessions outside the first time-ordered page.
         with sqlite3.connect(root/'index.db') as db:
             sid = db.execute('SELECT id FROM sources LIMIT 1').fetchone()[0]
             for agent, count in [('agy', 60), ('claude', 1), ('codex', 1), ('opencode', 1)]:
@@ -168,7 +169,8 @@ def main():
                 tabs = [line for row, line in sorted(displayed.items()) if 2 <= row < 2+expected_lines]
                 assert len(tabs) == expected_lines
                 assert all(any(label in line for line in tabs) for label in labels), (columns, tabs)
-                assert b'Group:' in displayed[2+expected_lines]
+                assert b'Group: Time' in displayed[2+expected_lines]
+                assert displayed[1].strip() == b'AgentHub', displayed[1]
                 assert all(len(line) < columns for line in tabs), (columns, tabs)
                 if expected_lines == 1:
                     assert b'  '.join(labels) == tabs[0], tabs

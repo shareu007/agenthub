@@ -4,12 +4,11 @@
 
 ## 浏览
 
-默认按 Agent 分类，组内按更新时间倒序。静态列表采用元信息卡片；交互界面参考 tig：固定状态栏、单行紧凑列表、列标题、元信息弱化、会话标题高亮、选中整行反色；光标移动时连续滚动，并在屏幕底部保留操作提示。静态输出示意：
+默认选择 Time，不按 Agent/项目分组，所有会话按更新时间倒序排列（最新在前）。静态列表采用元信息卡片；交互界面参考 tig：固定状态栏、单行紧凑列表、列标题、元信息弱化、会话标题高亮、选中整行反色；光标移动时连续滚动，并在屏幕底部保留操作提示。静态输出示意：
 
 ```text
-AgentHub · Sessions · 1 shown · group: Agent · sort: Time
+AgentHub · Sessions · 1 shown · group: Time · sort: Time
 
-── pi ──
 pi:01a1cd90-1c83-7753-bc2e-2d0c9bac8cf4  AgentHub native fixture: 渲染问题.
   2026-11-12 02:22:16 UTC · 4 records · source available
   Project: /tmp/agenthub-fixture-project
@@ -28,12 +27,14 @@ agenthub                                # 同上
 ah help                                 # 使用指南，不读配置/索引
 ah list --group-by agent --sort time     # 按 Agent 分类，组内最新优先
 ah list --group-by project --sort time   # 按项目分类
-ah list --group-by none --sort time      # 全局时间排序
-ah list --group-by none --sort agent     # 全局 Agent 排序
+ah list --group-by time --sort time      # 全局时间排序
+ah list --group-by time --sort agent     # 全局 Agent 排序
 ah list --group-by project --sort created --reverse
 ah list --no-interactive                 # 只打印，不打开会话
 ah list --group-by project --sort time --json
 ```
+
+`--group-by` 默认为 `time`，表示全局列表；保留 `none` 作为兼容别名，也可选 `agent`、`project`。终端最顶栏仅显示 `AgentHub`。
 
 `--sort` 支持 `time`（更新时间，别名 updated）、`created`（创建时间）、`agent`、`project`、`size`。大小默认从大到小，时间默认最新在前，Agent/项目默认 A-Z；`--reverse` 反转组内排序，分类本身仍 A-Z，未知时间/项目排末尾。分类和排序在数据库中针对所有匹配会话执行后，再应用 `--limit` / `--offset`，并非只重排当前页。JSON 保持扁平数组，增加 `size_bytes` 字段，顺序遵循相同规则。
 
@@ -51,7 +52,7 @@ ah list --group-by project --sort time --json
 | e | 修改持久显示标题（Enter 保存，Ctrl-U 清空，Esc 取消）；不改原生文件和 ID |
 | d | 永久删除选中的原生会话；展示身份后输入 `DELETE` 并回车确认，Esc 取消 |
 | t | 转移到新原生会话：选择目标、预览、y 确认，详见 session-transfer.md |
-| g | 循环按 Agent / 项目分类 / 不分类 |
+| g | 循环 Time（全局列表）/ Agent / 项目分类 |
 | s | 循环更新时间 / 创建时间 / Agent / 项目排序 |
 | r | 反转排序方向 |
 | n / p | 下一页/上一页数据（每页默认 50 项） |
@@ -95,7 +96,7 @@ ah list --group-by project --sort time --json
 
 恢复会先校验工作目录、解析可执行文件，再切换到会话项目；相对 PATH 在原工作目录解析。项目已移动时可用 `ah resume <id> --cwd /new/project --exec`。
 
-`SIZE` / JSON `size_bytes` 统计索引内该会话原生记录的紧凑 JSON UTF-8 字节数（含记录头/事件，AGY 的二进制字段按保留的 Base64 JSON 计算）。这用于比较会话内容规模，并非单条会话的物理磁盘占用；共享数据库整文件大小不应重复计给每个会话。数据在同步时累计，列表不遍历文件或正文。`ah list --sort size --group-by none` 可查看全局大小排序；`s` 轮换到 Size，`r` 反转。
+`SIZE` / JSON `size_bytes` 统计索引内该会话原生记录的紧凑 JSON UTF-8 字节数（含记录头/事件，AGY 的二进制字段按保留的 Base64 JSON 计算）。这用于比较会话内容规模，并非单条会话的物理磁盘占用；共享数据库整文件大小不应重复计给每个会话。数据在同步时累计，列表不遍历文件或正文。`ah list --sort size --group-by time` 可查看全局大小排序；`s` 轮换到 Size，`r` 反转。
 
 transfer 成功后直接刷新目标索引，切换目标 Agent，清除搜索/项目/时间筛选。保留分类、排序和方向，计算新 ID 的完整排序位置，自动翻到所在数据页并选中它；无需手动 sync。原生创建成功但索引刷新失败时显示单独提示，避免重复创建。
 

@@ -32,8 +32,9 @@ pub enum Sort {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum Group {
-    None,
     #[default]
+    #[value(alias = "none")]
+    Time,
     Agent,
     Project,
 }
@@ -42,8 +43,8 @@ pub enum Group {
 pub struct ListArgs {
     #[command(flatten)]
     pub selection: Selection,
-    /// Classify sessions before sorting (default: agent).
-    #[arg(long, value_enum, default_value = "agent")]
+    /// Use a global list (time), or classify by agent/project before sorting.
+    #[arg(long, value_enum, default_value = "time")]
     pub group_by: Group,
     /// Order within each group. Time/created: newest first; size: largest first; agent/project: A-Z.
     #[arg(long, value_enum, default_value = "time")]
@@ -62,7 +63,7 @@ impl ListArgs {
     fn order(&self) -> ListOrder {
         ListOrder {
             group: match self.group_by {
-                Group::None => GroupBy::None,
+                Group::Time => GroupBy::None,
                 Group::Agent => GroupBy::Agent,
                 Group::Project => GroupBy::Project,
             },
@@ -92,7 +93,7 @@ impl ListArgs {
 
 fn group_name(record: &SessionRecord, group: Group) -> String {
     match group {
-        Group::None => String::new(),
+        Group::Time => String::new(),
         Group::Agent => record.session.agent.to_string(),
         Group::Project => record
             .session
@@ -125,7 +126,7 @@ pub fn print(
     let mut previous = None;
     for record in records {
         let group = group_name(record, args.group_by);
-        if args.group_by != Group::None && previous.as_ref() != Some(&group) {
+        if args.group_by != Group::Time && previous.as_ref() != Some(&group) {
             writeln!(out, "── {} ──", ui.heading(&group))?;
             previous = Some(group);
         }
@@ -324,7 +325,7 @@ fn rows(records: &[SessionRecord], group: Group) -> Vec<Row> {
     let mut previous = None;
     for (i, record) in records.iter().enumerate() {
         let name = group_name(record, group);
-        if group != Group::None && previous.as_ref() != Some(&name) {
+        if group != Group::Time && previous.as_ref() != Some(&name) {
             rows.push(Row::Group(name.clone()));
             previous = Some(name);
         }
@@ -503,11 +504,7 @@ pub fn choose(
         }
         let mut out = io::stdout().lock();
         execute!(out, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
-        at(
-            &mut out,
-            0,
-            &ui.bar(&padded(" AgentHub  / Sessions", width)),
-        )?;
+        at(&mut out, 0, &ui.bar(&padded(" AgentHub", width)))?;
         for (i, bar) in bars.iter().enumerate() {
             at(&mut out, 1 + i as u16, bar)?;
         }
@@ -1048,9 +1045,9 @@ pub fn choose(
             }
             KeyCode::Char('g') => {
                 args.group_by = match args.group_by {
-                    Group::None => Group::Agent,
+                    Group::Time => Group::Agent,
                     Group::Agent => Group::Project,
-                    Group::Project => Group::None,
+                    Group::Project => Group::Time,
                 };
                 args.selection.offset = 0;
                 reload = true;
