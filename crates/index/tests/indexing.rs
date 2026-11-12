@@ -135,3 +135,41 @@ fn index_is_created_with_private_permissions() {
     let _store = Store::open(&path).unwrap();
     assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777,0o600);
 }
+
+#[test]
+fn global_ordering_grouping_and_null_times_have_stable_pages() {
+    use agenthub_index::{GroupBy, ListOrder, SortKey};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("pi");
+    fs::create_dir(&root).unwrap();
+    for (id, project, created, updated) in [
+        ("a", Some("/z"), Some(100), Some(400)),
+        ("b", Some("/a"), Some(200), Some(300)),
+        ("c", Some("/a"), Some(150), Some(350)),
+        ("d", None, None, None),
+    ] {
+        let header = serde_json::json!({"type":"session","id":id,"cwd":project,"timestamp":created});
+        let message = serde_json::json!({"type":"message","timestamp":updated,"message":{"role":"user","content":"sort fixture"}});
+        fs::write(root.join(format!("{id}.jsonl")), format!("{header}\n{message}\n")).unwrap();
+    }
+    let a = adapter(Agent::Pi, root);
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    assert_eq!(store.sync(a.as_ref(), false).unwrap().indexed, 4);
+    let keys = |order| store.list_ordered(&Filter::recent(), order).unwrap().into_iter().map(|r|r.session.native_id).collect::<Vec<_>>();
+    assert_eq!(keys(ListOrder::default()), ["a", "c", "b", "d"]);
+    assert_eq!(keys(ListOrder { reverse:true, ..Default::default() }), ["b", "c", "a", "d"]);
+    assert_eq!(keys(ListOrder { sort:SortKey::Created, ..Default::default() }), ["b", "c", "a", "d"]);
+    assert_eq!(keys(ListOrder { group:GroupBy::Project, ..Default::default() }), ["c", "b", "a", "d"]);
+    assert_eq!(keys(ListOrder { sort:SortKey::Project, ..Default::default() }), ["c", "b", "a", "d"]);
+    let page = store.list_ordered(&Filter{limit:1,offset:1,..Filter::recent()}, ListOrder{group:GroupBy::Project,..Default::default()}).unwrap();
+    assert_eq!(page[0].session.native_id, "b");
+    let codex_root = dir.path().join("codex");
+    fs::create_dir_all(codex_root.join("sessions")).unwrap();
+    fs::write(codex_root.join("sessions/cx.jsonl"), "{\"type\":\"session_meta\",\"timestamp\":1,\"payload\":{\"id\":\"cx\",\"cwd\":\"/z\"}}\n").unwrap();
+    let codex = adapter(Agent::Codex, codex_root);
+    store.sync(codex.as_ref(), false).unwrap();
+    let grouped = store.list_ordered(&Filter{limit:2,..Filter::recent()}, ListOrder{group:GroupBy::Agent,..Default::default()}).unwrap();
+    assert_eq!(grouped.iter().map(|r|r.session.key.as_str()).collect::<Vec<_>>(), ["codex:cx", "pi:a"]);
+    let reverse = store.list_ordered(&Filter::recent(), ListOrder{sort:SortKey::Agent,reverse:true,..Default::default()}).unwrap();
+    assert_eq!(reverse.last().unwrap().session.key, "codex:cx");
+}

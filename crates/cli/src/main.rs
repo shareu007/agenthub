@@ -6,12 +6,13 @@ use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
 use std::{collections::BTreeMap, env, fs, io::{self, Write}, path::{Path, PathBuf}, process::{Command, ExitCode}};
 mod ui;
+mod listing;
 use ui::{cell, safe, Ui};
 
 #[derive(Parser)]
 #[command(name="agenthub", version, about="Find, read, and resume your coding-agent sessions",
-    long_about="A local, read-only session index for Claude Code, Codex, OpenCode, Pi, and AGY.\nRuns on demand on Linux and macOS. Native agents are launched only with resume --exec.",
-    after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  agenthub list --agent codex\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
+    long_about="A local, read-only session index for Claude Code, Codex, OpenCode, Pi, and AGY.\nRuns on demand on Linux and macOS. Run without a subcommand to browse sessions. Press Enter to resume, or use resume --exec.",
+    after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  ah\n  agenthub list --agent codex --group-by project --sort time\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
 struct Cli {
     /// Index path; never point this at an agent database.
     #[arg(long, global=true, env="AGENTHUB_DB")]
@@ -26,7 +27,7 @@ struct Cli {
     #[arg(long, global=true, value_enum, default_value="auto")]
     color: ui::Color,
     #[command(subcommand)]
-    command: Action,
+    command: Option<Action>,
 }
 
 #[derive(Subcommand)]
@@ -37,8 +38,8 @@ enum Action {
         /// Ignore source fingerprints and reparse all selected sources.
         #[arg(long)] force: bool,
     },
-    /// List indexed sessions, newest update first. Does not scan source files.
-    List(Selection),
+    /// Browse indexed sessions. In a terminal, select and press Enter to resume.
+    List(listing::ListArgs),
     /// Show an entire native transcript in record order.
     Show {
         id: String,
@@ -55,7 +56,7 @@ enum Action {
     Doctor,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct Selection {
     #[arg(long)] agent: Option<Agent>,
     /// Exact project working directory.
@@ -67,6 +68,11 @@ struct Selection {
     #[arg(long)] include_missing: bool,
     #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u32).range(1..=10000))] limit: u32,
     #[arg(long, default_value_t=0)] offset: u32,
+}
+impl Default for Selection {
+    fn default() -> Self {
+        Self { agent: None, project: None, since: None, until: None, include_missing: false, limit: 50, offset: 0 }
+    }
 }
 impl Selection {
     fn filter(&self) -> Result<Filter> {
@@ -178,7 +184,7 @@ fn run(cli: Cli) -> Result<bool> {
     let ui = Ui::new(cli.color, cli.json);
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
-    if matches!(&cli.command,Action::Doctor) {
+    if matches!(&cli.command,Some(Action::Doctor)) {
         let paths = env::var_os("PATH").map(|v| env::split_paths(&v).collect::<Vec<_>>()).unwrap_or_default();
         let mut results = Vec::new();
         for agent in Agent::ALL {
@@ -205,7 +211,7 @@ fn run(cli: Cli) -> Result<bool> {
         return Ok(results.iter().all(|r| r["error"].is_null() && r["warnings"].as_array().is_none_or(Vec::is_empty)));
     }
     let mut store = Store::open(&settings.db)?;
-    match cli.command {
+    match cli.command.unwrap_or_else(|| Action::List(listing::ListArgs::default())) {
         Action::Sync { agent,force } => {
             let mut reports = BTreeMap::new();
             let mut success = true;
@@ -230,23 +236,18 @@ fn run(cli: Cli) -> Result<bool> {
             out.flush()?;
             return Ok(success);
         }
-        Action::List(selection) => {
-            let records = store.list(&selection.filter()?)?;
-            if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&records)?)?; }
-            else {
-                writeln!(out,"{} · {} shown\n",ui.heading("AgentHub · Sessions"),records.len())?;
-                if records.is_empty() { writeln!(out,"No sessions match. Run agenthub sync, or adjust your filters.\nUse --include-missing to include cached sessions whose sources disappeared.")?; }
-                for record in &records {
-                    let s = &record.session;
-                    writeln!(out,"{}  {}",ui.heading(&s.key),cell(&s.title))?;
-                    writeln!(out,"  {} · {} records · {}",ui::time(s.updated_at),record.message_count,if record.available { "source available" } else { "cached only" })?;
-                    writeln!(out,"  Project: {}\n",cell(&s.project_path.as_deref().map(|p|p.to_string_lossy()).unwrap_or_default()))?;
-                }
-                if !records.is_empty() {
-                    writeln!(out,"View: agenthub show <agent:id>\nResume: agenthub resume <agent:id> --exec")?;
-                    if records.len() == selection.limit as usize { writeln!(out,"Next page (keep your filters): --offset {} --limit {}",u64::from(selection.offset)+u64::from(selection.limit),selection.limit)?; }
-                }
+        Action::List(args) => {
+            let interactive = args.use_terminal(cli.json)?;
+            if interactive {
+                out.flush()?;
+                drop(out);
+                let plan = listing::choose(&store, args)?;
+                drop(store);
+                return match plan { Some(plan) => execute_plan(plan), None => Ok(true) };
             }
+            let records = args.records(&store)?;
+            if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&records)?)?; }
+            else { listing::print(&mut out, &records, &args, &ui)?; }
         }
         Action::Show { id,raw,offset,limit } => {
             let record = store.find(&id)?;
@@ -289,21 +290,24 @@ fn run(cli: Cli) -> Result<bool> {
                 out.flush()?;
                 drop(out);
                 drop(store);
-                let mut command = Command::new(&plan.program);
-                command.args(&plan.args);
-                for (key,value) in &plan.env { command.env(key,value); }
-                if let Some(cwd) = &plan.cwd { command.current_dir(cwd); }
-                // exec preserves terminal signals and the native exit status on both supported platforms.
-                #[cfg(unix)]
-                { use std::os::unix::process::CommandExt; return Err(command.exec()).with_context(|| format!("launch {}",plan.program)); }
-                #[cfg(not(unix))]
-                { return Ok(command.status()?.success()); }
+                return execute_plan(plan);
             }
         }
         Action::Doctor => unreachable!(),
     }
     out.flush()?;
     Ok(true)
+}
+
+fn execute_plan(plan: ResumeCommand) -> Result<bool> {
+    let mut command = Command::new(&plan.program);
+    command.args(&plan.args);
+    for (key, value) in &plan.env { command.env(key, value); }
+    if let Some(cwd) = &plan.cwd { command.current_dir(cwd); }
+    #[cfg(unix)]
+    { use std::os::unix::process::CommandExt; Err(command.exec()).with_context(|| format!("launch {}; check that the native CLI is installed and on PATH", plan.program)) }
+    #[cfg(not(unix))]
+    { Ok(command.status()?.success()) }
 }
 
 fn main() -> ExitCode {

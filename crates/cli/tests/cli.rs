@@ -114,3 +114,48 @@ fn help_gives_a_workflow_without_accessing_configuration() {
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("QUICK START") && help.contains("--json") && help.contains("--exec"));
 }
+
+#[test]
+fn both_names_default_to_list_and_help_stays_explicit() {
+    let (_dir, config) = fixture();
+    assert!(run(&config, &["sync"]).status.success());
+    let explicit = run(&config, &["list", "--json"]);
+    for binary in [env!("CARGO_BIN_EXE_agenthub"), env!("CARGO_BIN_EXE_ah")] {
+        let result = Command::new(binary).arg("--config").arg(&config).arg("--json").output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, explicit.stdout);
+        let help = Command::new(binary).args(["help"]).output().unwrap();
+        assert!(help.status.success());
+        assert!(String::from_utf8(help.stdout).unwrap().contains("QUICK START"));
+    }
+    let text = run(&config, &[]);
+    assert!(String::from_utf8(text.stdout).unwrap().contains("AgentHub · Sessions"));
+    let forced = run(&config, &["list", "--interactive"]);
+    assert!(!forced.status.success());
+    assert!(String::from_utf8(forced.stderr).unwrap().contains("requires terminal"));
+    let json = run(&config, &["list", "--interactive", "--json"]);
+    assert!(!json.status.success());
+}
+
+#[test]
+fn grouping_and_sorting_happen_before_list_pagination() {
+    let (dir, config) = fixture();
+    for (id, project, timestamp) in [("old", "/z", "2025-01-01T00:00:00Z"), ("new", "/a", "2027-01-01T00:00:00Z")] {
+        fs::write(dir.path().join(format!("pi/{id}.jsonl")), format!("{{\"type\":\"session\",\"id\":\"{id}\",\"cwd\":\"{project}\",\"timestamp\":\"{timestamp}\"}}\n")).unwrap();
+    }
+    assert!(run(&config, &["sync"]).status.success());
+    let result = run(&config, &["list", "--group-by", "none", "--sort", "time", "--limit", "1", "--offset", "1", "--json"]);
+    let records: Vec<serde_json::Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(records[0]["key"], "pi:ui");
+    let result = run(&config, &["list", "--group-by", "none", "--sort", "time", "--reverse", "--limit", "1", "--json"]);
+    let records: Vec<serde_json::Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(records[0]["key"], "pi:old");
+    let result = run(&config, &["list", "--group-by", "project", "--limit", "1", "--json"]);
+    let records: Vec<serde_json::Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(records[0]["key"], "pi:new");
+    let result = run(&config, &["list", "--group-by", "project", "--no-interactive"]);
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(text.find("── /a ──").unwrap() < text.find("── /tmp ──").unwrap());
+    assert!(text.find("── /tmp ──").unwrap() < text.find("── /z ──").unwrap());
+    assert!(!run(&config, &["list", "--sort", "arbitrary-sql"]).status.success());
+}

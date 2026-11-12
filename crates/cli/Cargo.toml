@@ -9,6 +9,10 @@ license.workspace = true
 name = "agenthub"
 path = "src/main.rs"
 
+[[bin]]
+name = "ah"
+path = "src/bin/ah.rs"
+
 [dependencies]
 agenthub-core.workspace = true
 agenthub-adapters.workspace = true
@@ -19,6 +23,8 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+crossterm = "0.28.1"
+unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

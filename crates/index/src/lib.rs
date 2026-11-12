@@ -18,6 +18,19 @@ pub struct SessionRecord {
     pub message_count: i64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SortKey { #[default] Updated, Created, Agent, Project }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum GroupBy { #[default] None, Agent, Project }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListOrder {
+    pub sort: SortKey,
+    pub group: GroupBy,
+    pub reverse: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Filter {
     pub agent: Option<Agent>,
@@ -165,7 +178,25 @@ impl Store {
     }
 
     pub fn list(&self, filter: &Filter) -> Result<Vec<SessionRecord>> {
-        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {WHERE_FILTER} ORDER BY s.updated_at DESC,s.key LIMIT ?6 OFFSET ?7");
+        self.list_ordered(filter, ListOrder::default())
+    }
+
+    /// Order the complete matching result before applying pagination. Columns and
+    /// directions come only from typed choices, never from interpolated user input.
+    pub fn list_ordered(&self, filter: &Filter, order: ListOrder) -> Result<Vec<SessionRecord>> {
+        let group = match order.group {
+            GroupBy::None => "",
+            GroupBy::Agent => "s.agent ASC,",
+            GroupBy::Project => "s.project_path IS NULL,s.project_path ASC,",
+        };
+        let (column, descending) = match order.sort {
+            SortKey::Updated => ("s.updated_at", true),
+            SortKey::Created => ("s.created_at", true),
+            SortKey::Agent => ("s.agent", false),
+            SortKey::Project => ("s.project_path", false),
+        };
+        let direction = if descending != order.reverse { "DESC" } else { "ASC" };
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {WHERE_FILTER} ORDER BY {group}{column} {direction} NULLS LAST,s.updated_at DESC,s.key ASC LIMIT ?6 OFFSET ?7");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(filter.args()), session_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
