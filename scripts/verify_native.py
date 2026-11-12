@@ -103,8 +103,46 @@ def check(args):
     binary = native_version(agent, entry['version'], environment)
     if args.probe == 'terminal':
         return dict(terminal_probe(command + ['resume', args.session, '--exec'], args.expect, args.timeout), version=entry['version'])
+    if args.probe == 'dsh-rpc':
+        if agent != 'dsh':
+            raise RuntimeError('dsh-rpc probe is valid only for dsh sessions')
+        show = subprocess.run(command + ['show', args.session, '--json'], capture_output=True, text=True, timeout=15)
+        if show.returncode or args.expect not in show.stdout:
+            raise RuntimeError('AgentHub show output did not contain expected marker for dsh session')
+        rpc_env = dict(environment, DEEPSEEK_API_KEY='dsh-offline-probe', DEEPSEEK_TELEMETRY_DISABLED='1', DSH_TELEMETRY_DISABLED='1')
+        proc = subprocess.Popen([binary, '--profile', 'sdk'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=rpc_env, cwd=plan['cwd'] or '/tmp')
+        try:
+            def rpc_call(req_id, method, params):
+                proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}) + '\n')
+                proc.stdin.flush()
+                events = []
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        raise RuntimeError('EOF waiting for DSH SDK JSON-RPC response')
+                    msg = json.loads(line)
+                    if msg.get('method') == 'session.event':
+                        events.append(msg['params'])
+                    if msg.get('id') == req_id:
+                        return msg, events
+            init_reply, _ = rpc_call(1, 'initialize', {'cwd': plan['cwd'] or '/tmp', 'provider': 'deepseek-official', 'model': 'deepseek-reasoner'})
+            resume_reply, events = rpc_call(2, 'session/resume', {'sessionId': native_id})
+            cwd_reply, _ = rpc_call(3, 'session/working-directory/get', {'sessionId': native_id})
+            rpc_call(4, 'shutdown', {})
+            proc.wait(timeout=10)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if ('result' not in init_reply or 'result' not in resume_reply
+                or cwd_reply.get('result', {}).get('cwd') != plan['cwd']
+                or not any(e.get('sessionId') == native_id for e in events)):
+            raise RuntimeError('Native DSH SDK did not confirm the original identity and working directory')
+        return {'version': entry['version'], 'probe': 'native-dsh-sdk-rpc-from-agenthub-plan', 'original_id_confirmed': True,
+                'transcript_marker_seen': True, 'restored_cwd': cwd_reply['result']['cwd'], 'model_called': False}
     if agent != 'pi':
-        raise RuntimeError('RPC probe is currently verified only for Pi; use terminal probe for other agents')
+        raise RuntimeError('RPC probe is currently verified only for Pi and DSH; use terminal probe for other agents')
     result = subprocess.run([binary, *plan['args'], '--mode', 'rpc', '--no-extensions', '--no-skills', '--no-prompt-templates'],
                             input='{"id":"state","type":"get_state"}\n{"id":"messages","type":"get_messages"}\n',
                             capture_output=True, text=True, env=environment, cwd=plan['cwd'], timeout=args.timeout)
@@ -125,7 +163,7 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--session', required=True)
     parser.add_argument('--expect', required=True, help='Unique non-sensitive marker already in the test transcript')
-    parser.add_argument('--probe', choices=['terminal', 'pi-rpc'], default='terminal')
+    parser.add_argument('--probe', choices=['terminal', 'pi-rpc', 'dsh-rpc'], default='terminal')
     parser.add_argument('--timeout', type=float, default=20)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()

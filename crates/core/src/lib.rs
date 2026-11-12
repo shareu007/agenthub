@@ -11,10 +11,11 @@ pub enum Agent {
     Opencode,
     Pi,
     Agy,
+    Dsh,
 }
 
 impl Agent {
-    pub const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Opencode, Self::Pi, Self::Agy];
+    pub const ALL: [Self; 6] = [Self::Claude, Self::Codex, Self::Opencode, Self::Pi, Self::Agy, Self::Dsh];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -22,6 +23,7 @@ impl Agent {
             Self::Opencode => "opencode",
             Self::Pi => "pi",
             Self::Agy => "agy",
+            Self::Dsh => "dsh",
         }
     }
 }
@@ -36,7 +38,7 @@ impl FromStr for Agent {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
         Self::ALL.into_iter().find(|a| a.as_str() == s)
-            .with_context(|| format!("unknown agent {s:?}; expected claude, codex, opencode, pi, agy"))
+            .with_context(|| format!("unknown agent {s:?}; expected claude, codex, opencode, pi, agy, dsh"))
     }
 }
 
@@ -179,6 +181,7 @@ pub fn resume_command(session: &Session) -> Result<ResumeCommand> {
         Agent::Opencode => vec!["--session".into(), id.clone()],
         Agent::Pi => vec!["--session".into(), session.source_path.to_str().context("non UTF-8 session path")?.into()],
         Agent::Agy => vec!["--conversation".into(), id.clone()],
+        Agent::Dsh => vec!["--profile".into(), "headless".into(), "--session-id".into(), id.clone()],
     };
     Ok(ResumeCommand { program: session.agent.as_str().into(), args, cwd: session.project_path.clone(), env: Vec::new() })
 }
@@ -224,6 +227,10 @@ mod tests {
             assert_eq!(command.args[0],flag);
             assert_eq!(command.args[1],if agent == Agent::Pi { "/tmp/source.jsonl" } else { "native-id" });
         }
+        let dsh = Session::new(Agent::Dsh,"session-123".into(),PathBuf::from("/tmp/session.v4.jsonl.zstd")).unwrap();
+        let dsh_cmd = resume_command(&dsh).unwrap();
+        assert_eq!(dsh_cmd.program,"dsh");
+        assert_eq!(dsh_cmd.args,vec!["--profile","headless","--session-id","session-123"]);
         assert!(Session::new(Agent::Agy,"--flag".into(),PathBuf::new()).is_err());
         assert!(Session::new(Agent::Agy,"bad\nidentifier".into(),PathBuf::new()).is_err());
     }

@@ -9,4 +9,5 @@
 # opencode = "~/.local/share/opencode"  # or the opencode.db file itself
 # pi = "~/.pi/agent/sessions"
 # agy = "~/.gemini/antigravity-cli"
+# dsh = "~/.dsh/sessions"
 

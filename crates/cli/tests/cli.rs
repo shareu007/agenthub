@@ -14,10 +14,22 @@ fn isolated_cli_sync_search_show_and_resume_plan() {
         "{\"type\":\"session\",\"version\":3,\"id\":\"example\",\"cwd\":\"/tmp\"}\n",
         "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"unicode 渲染问题\"}}\n"
     )).unwrap();
+    let dsh_root = home.join("dsh/sessions");
+    fs::create_dir_all(dsh_root.join("--tmp--/session-dsh-1")).unwrap();
+    fs::write(dsh_root.join("--tmp--/session-dsh-1/session.v4.jsonl"), concat!(
+        "{\"type\":\"session\",\"version\":4,\"id\":\"session-dsh-1\",\"createdAt\":1794450000000,\"cwd\":\"/tmp\"}\n",
+        "{\"type\":\"user/message\",\"seq\":0,\"time\":1794450001000,\"data\":{\"id\":\"u1\",\"role\":\"user\",\"source\":{\"kind\":\"user\"},\"content\":[{\"type\":\"text\",\"text\":\"dsh prompt\"}]}}\n"
+    )).unwrap();
     let config = home.join("config.toml");
     let mut config_text = format!("database = {:?}\n[sources]\n",home.join("index.db").to_str().unwrap());
-    for agent in ["claude","codex","opencode","pi","agy"] {
-        let path = if agent == "pi" {sources.clone()} else {home.join(agent)};
+    for agent in ["claude","codex","opencode","pi","agy","dsh"] {
+        let path = if agent == "pi" {
+            sources.clone()
+        } else if agent == "dsh" {
+            dsh_root.clone()
+        } else {
+            home.join(agent)
+        };
         config_text.push_str(&format!("{agent} = {:?}\n",path.to_str().unwrap()));
     }
     fs::write(&config,config_text).unwrap();
@@ -25,6 +37,7 @@ fn isolated_cli_sync_search_show_and_resume_plan() {
     assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["pi"]["indexed"],1);
+    assert_eq!(report["dsh"]["indexed"],1);
     let result = run(&config,&["search","渲染","--json"]);
     assert!(result.status.success());
     assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&result.stdout).unwrap().is_empty());
@@ -36,6 +49,12 @@ fn isolated_cli_sync_search_show_and_resume_plan() {
     let plan:serde_json::Value=serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(plan["program"],"pi");
     assert_eq!(plan["args"][0],"--session");
+    let dsh_resume = run(&config,&["resume","dsh:session-dsh-1","--json"]);
+    assert!(dsh_resume.status.success());
+    let dsh_plan: serde_json::Value = serde_json::from_slice(&dsh_resume.stdout).unwrap();
+    assert_eq!(dsh_plan["program"],"dsh");
+    assert_eq!(dsh_plan["args"],serde_json::json!(["--profile","headless","--session-id","session-dsh-1"]));
+    assert_eq!(dsh_plan["env"][0][0],"DSH_HOME");
     // Doctor never creates a database, even in a new installation.
     fs::remove_file(home.join("index.db")).unwrap();
     assert!(run(&config,&["doctor"]).status.success());
@@ -52,7 +71,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     )).unwrap();
     let config = root.join("config.toml");
     let mut text = format!("database = {:?}\n[sources]\n", root.join("index.db"));
-    for agent in ["claude", "codex", "opencode", "pi", "agy"] {
+    for agent in ["claude", "codex", "opencode", "pi", "agy", "dsh"] {
         text.push_str(&format!("{agent} = {:?}\n", root.join(agent)));
     }
     fs::write(&config, text).unwrap();

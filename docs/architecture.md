@@ -49,11 +49,11 @@ SQLite 自带编译的版本提供 FTS5 trigram，避免 Linux/macOS 系统 SQLi
 6. 再次检查来源指纹；读取失败、源变化、非法格式或不完整 Sink 生命周期使本次来源事务回滚。成功后提交。
 7. 只有完整遍历且没有同步错误时，才把未发现的旧来源标记为缺失。缺失来源和库内已删除的会话保留缓存供查看，默认不参与列表和搜索。
 
-当前增量粒度是“来源”：JSONL 为单文件，AGY 为单会话数据库，OpenCode 为共享数据库。JSONL 追加后会重读该文件；OpenCode 数据库变化后会重读其中全部会话。这样能正确处理压缩、修改、截断、撤销和旧记录编辑，避免只有 append offset 时的错误。未承诺大库变化后的行级增量；后续应依据实测引入适配器专用 revision，而不是依赖一律可靠的更新时间假设。
+当前增量粒度是“来源”：JSONL 与 DeepSeek Harness（`.jsonl`/`.jsonl.zstd`）为单会话文件，AGY 为单会话数据库，OpenCode 为共享数据库。JSONL/DSH 追加或代际迁移后会重读该会话；OpenCode 数据库变化后会重读其中全部会话。这样能正确处理压缩、修改、截断、撤销和旧记录编辑，避免只有 append offset 时的错误。未承诺大库变化后的行级增量；后续应依据实测引入适配器专用 revision，而不是依赖一律可靠的更新时间假设。
 
 指纹是变更检测，不是内容哈希；`sync --force` 可强制重建。AGY 汇总库变化会触发关联会话重读；一次 Adapter 实例缓存并复用汇总快照，避免每会话复制同一文件。
 
-JSONL 单条记录上限 32 MiB；过大的记录报错并保留上次成功索引。最后一条未闭合 JSON 且无换行时被视为正在写入的尾部，已完成记录可以提交，并保存警告。中间损坏、空文件或缺失必需头部会报错。完整但尚无换行的 JSON 记录仍可读取。
+JSONL 单条记录上限 32 MiB；过大的记录报错并保留上次成功索引。最后一条未闭合 JSON 且无换行（或 `.jsonl.zstd` 末尾未写完的 Zstandard frame）时被视为正在写入的尾部，已完成记录可以提交，并保存警告。中间损坏、空文件或缺失必需头部会报错。完整但尚无换行的 JSON 记录仍可读取。
 
 ## 5. 严格只读的 SQLite 来源
 
@@ -79,4 +79,4 @@ Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell �
 
 ## 8. 验证边界
 
-2026-11-12 在 Linux / Rust 1.85.0 下运行了 31 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。新增 AGY 1.5.6、Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；三者均通过真实 `resume --exec` 终端历史加载，Pi 另通过 RPC 身份及消息校验；未调用远端模型续聊。Claude 和 Codex 的真实恢复仍未验收，macOS / stable Rust 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。
+2026-11-12 在 Linux 下运行了 30 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。包含 AGY 1.5.6、DeepSeek Harness（`dsh`）0.2.2-rc.1、Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；AGY、Pi、OpenCode 通过真实 `resume --exec` 终端历史加载，Pi 与 DeepSeek Harness 通过各自原生 RPC 身份及工作目录/消息校验；未调用远端模型续聊。Claude 和 Codex 的真实恢复仍未验收，macOS 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。

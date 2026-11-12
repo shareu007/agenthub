@@ -83,7 +83,7 @@ def main():
         config = root/'config.toml'
         config.write_text('database = '+json.dumps(str(root/'index.db'))+'\n[sources]\n'+''.join(
             name+' = '+json.dumps(str(source if name == 'pi' else root/name))+'\n'
-            for name in ['claude', 'codex', 'pi', 'opencode', 'agy']))
+            for name in ['claude', 'codex', 'pi', 'opencode', 'agy', 'dsh']))
         bindir = root/'bin'
         bindir.mkdir()
         result_file = root/'launch.json'

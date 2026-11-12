@@ -251,3 +251,47 @@ fn agy_1_5_6_native_cli_fixture_preserves_steps_and_tool_call() {
     assert!(!dir.path().join("conversation_summaries.db-shm").exists());
     assert!(!dir.path().join("conversations/93748d3b-ae91-447e-a184-c16dc21090c9.db-shm").exists());
 }
+
+#[test]
+fn dsh_0_2_2_rc_1_native_cli_fixture_preserves_zstd_frames_tools_and_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let sess_dir = dir.path().join("--tmp-agenthub-fixture-project--/session-fixture");
+    fs::create_dir_all(&sess_dir).unwrap();
+    let zstd_bytes = include_bytes!("../../../tests/fixtures/dsh/0.2.2-rc.1.jsonl.zstd");
+    let v4_path = sess_dir.join("session.v4.jsonl.zstd");
+    let v3_path = sess_dir.join("session.v3.jsonl");
+    let lock_path = sess_dir.join("session.lock");
+    fs::write(&v4_path, zstd_bytes).unwrap();
+    fs::write(&v3_path, "{\"type\":\"session\",\"version\":3,\"id\":\"old\",\"createdAt\":100}\n").unwrap();
+    fs::write(&lock_path, "").unwrap();
+
+    let a = adapter(Agent::Dsh, dir.path().into());
+    let sources = a.discover().unwrap().sources;
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].path, v4_path);
+    assert_eq!(sources[0].dependencies, vec![v3_path.clone(), v4_path.clone()]);
+
+    let mut capture = Capture::default();
+    a.read(&sources[0], &mut capture).unwrap();
+    assert_eq!(capture.sessions.len(), 1);
+    let s = &capture.sessions[0];
+    assert!(s.native_id.starts_with("session-"));
+    assert_eq!(s.project_path.as_deref(), Some(Path::new("/tmp/agenthub-fixture-project")));
+    assert_eq!(s.title, "Fixture session AH_FIXTURE_20261112");
+    assert!(s.warnings.is_empty());
+
+    assert!(capture.messages.iter().any(|m| m.role == "user" && m.text.contains("Inspect AH_FIXTURE_20261112")));
+    assert!(capture.messages.iter().any(|m| m.kind == "user/message" && m.role == "system" && m.text.contains("Current runtime context")));
+    assert!(capture.messages.iter().any(|m| m.role == "tool_call" && m.native_id.as_deref() == Some("call_fixture_1") && m.text.contains("glob")));
+    assert!(capture.messages.iter().any(|m| m.role == "tool" && m.parent_id.as_deref() == Some("16") && m.text.contains("README.md")));
+    assert!(capture.messages.iter().any(|m| m.role == "assistant" && m.text.contains("AH_FIXTURE_20261112 verified on DeepSeek Harness.")));
+    assert_eq!(fs::read(&v4_path).unwrap(), zstd_bytes);
+
+    // Torn final Zstandard frame preserves earlier committed frames with a warning.
+    fs::write(&v4_path, &zstd_bytes[..zstd_bytes.len() - 5]).unwrap();
+    let mut torn_capture = Capture::default();
+    a.read(&sources[0], &mut torn_capture).unwrap();
+    assert!(torn_capture.sessions[0].warnings.iter().any(|w| w.contains("incomplete final Zstandard frame")));
+    assert!(torn_capture.messages.iter().any(|m| m.role == "user" && m.text.contains("Inspect AH_FIXTURE_20261112")));
+}
+

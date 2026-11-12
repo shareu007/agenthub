@@ -24,6 +24,14 @@
       "reason": "Preinstalled prerelease; no disposable native session; not a stable compatibility promise",
       "fixture": null
     },
+    "dsh": {
+      "version": "0.2.2-rc.1",
+      "distribution": "@deepseek-ai/dsh",
+      "status": "native-cli-and-sdk-rpc-load",
+      "reason": "Native DSH headless CLI writer with controlled local DeepSeek Messages SSE endpoint stored v4 Zstandard-compressed session with user, reasoning, tool_call, tool, assistant, and session/title events; DSH SDK JSON-RPC session/resume and headless --session-id confirmed original ID, working directory, and history; no remote model called",
+      "fixture": "tests/fixtures/dsh/0.2.2-rc.1.jsonl.zstd",
+      "fixture_sha256": "c68916cac347dd093c1d4ca843414811bb127a5bca26385a806e9ad12eb3f971"
+    },
     "opencode": {
       "version": "1.19.5",
       "distribution": "opencode-linux-x64",

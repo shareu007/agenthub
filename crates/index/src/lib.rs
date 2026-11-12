@@ -7,7 +7,7 @@ use std::{collections::HashSet, fs, path::{Path, PathBuf}, time::Duration};
 
 const APP_ID: i64 = 0x41485542;
 const SCHEMA_VERSION: i64 = 1;
-const PARSER_VERSION: i64 = 2;
+const PARSER_VERSION: i64 = 3;
 const SESSION_COLUMNS: &str = "s.key,s.native_id,s.agent,s.title,s.project_path,s.created_at,s.updated_at,s.source_path,s.parent_id,s.warnings,s.available,s.message_count";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

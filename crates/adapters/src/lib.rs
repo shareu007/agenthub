@@ -1,11 +1,13 @@
 //! Built-in, statically registered adapters. Agent stores are opened as files for reading only.
 mod agy;
+mod dsh;
 mod jsonl;
 mod opencode;
 mod protobuf;
 mod sqlite;
 
 pub use agy::AgyAdapter;
+pub use dsh::DshAdapter;
 pub use jsonl::JsonlAdapter;
 pub use opencode::OpenCodeAdapter;
 
@@ -14,7 +16,7 @@ use anyhow::{Context, Result};
 use std::{env, path::{Path, PathBuf}};
 
 pub fn default_root(agent: Agent, home: &Path) -> PathBuf {
-    let env_path = |name: &str| env::var_os(name).filter(|s| !s.is_empty()).map(PathBuf::from);
+    let env_path = |name: &str| env::var_os(name).filter(|s| !s.to_string_lossy().trim().is_empty()).map(PathBuf::from);
     match agent {
         Agent::Claude => env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")).join("projects"),
         Agent::Codex => env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
@@ -23,12 +25,14 @@ pub fn default_root(agent: Agent, home: &Path) -> PathBuf {
             env_path("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".pi/agent")).join("sessions")
         }),
         Agent::Agy => home.join(".gemini/antigravity-cli"),
+        Agent::Dsh => env_path("DSH_HOME").unwrap_or_else(|| home.join(".dsh")).join("sessions"),
     }
 }
 
 pub fn adapter(agent: Agent, root: PathBuf) -> Box<dyn Adapter> {
     match agent {
         Agent::Agy => Box::new(AgyAdapter::new(root)),
+        Agent::Dsh => Box::new(DshAdapter::new(root)),
         Agent::Opencode => Box::new(OpenCodeAdapter::new(root)),
         _ => Box::new(JsonlAdapter::new(agent, root)),
     }

@@ -1,6 +1,6 @@
 # Session 存储格式调查
 
-结构调查记录日期：2026-11-12。下文保留历史格式分析，旧“本机观测”未全部复现，不能作为当前版本验收证明。当前实际安装版本、原生写出样本与恢复证据以 [兼容性矩阵](compatibility.md) 为准：AGY 1.5.6、Pi 1.5.2、OpenCode 1.19.5 已有受控原生样本和恢复加载验证，Claude 2.1.322 与 Codex 0.167.0-alpha.4 仅核实安装版本。没有复制私人对话、认证文件或专有程序二进制进仓库；既有内联夹具仍是合成数据。
+结构调查记录日期：2026-11-12。下文保留历史格式分析，旧“本机观测”未全部复现，不能作为当前版本验收证明。当前实际安装版本、原生写出样本与恢复证据以 [兼容性矩阵](compatibility.md) 为准：AGY 1.5.6、DeepSeek Harness（`dsh`）0.2.2-rc.1、Pi 1.5.2、OpenCode 1.19.5 已有受控原生样本和恢复加载验证，Claude 2.1.322 与 Codex 0.167.0-alpha.4 仅核实安装版本。没有复制私人对话、认证文件或专有程序二进制进仓库；既有内联夹具仍是合成数据。
 
 ## Claude Code
 
@@ -46,6 +46,15 @@
 - 实现：按 idx 读取全部 steps；解码已核实的用户/助手（含思考与工具调用）路径，工具执行等其他步骤（如 `read_file` 对应的 `step_type=132`）展示 `field > 5` 的 wire tree，并保留所有原 step payload 及相关步骤列的 Base64。未知 step_format、损坏 protobuf 或缺失已知字段标记 opaque 和 warning。侧表中的附件/轨迹不展开；不能宣称所有工具步骤已转换为统一语义对象，也不包含上游未保存在 steps 中的内容。
 - `workspace_uris` 解析本地 `file:///...` 和 `file://localhost/...`，按 UTF-8 percent decoding 还原路径；不把远程 URI 当成本地工作目录。
 - 恢复：`agy --conversation <id>`，在原项目目录启动。顶层 `agy` 实测不接受 `--gemini-dir`/`--app-data-dir`（仅 `agy acp` 支持），因此自定义 AGY 来源只提供索引/读取，恢复入口明确报错。
+
+## DeepSeek Harness（dsh）
+
+- 上游：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)、[`@deepseek-ai/dsh-session-persistence-jsonl`](https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/session/persistence-jsonl)、[`@deepseek-ai/dsh-home-paths`](https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/util/home-paths)。当前原生样本来自 `@deepseek-ai/dsh 0.2.2-rc.1`，会话格式版本 v4。
+- 来源：`$DSH_HOME/sessions/<project-dir>/<encoded-session-id>/session[.vN].jsonl[.zstd]`，默认 `~/.dsh/sessions`（空白 `DSH_HOME` 回退 `~/.dsh`）。`<project-dir>` 为 `--<encoded-cwd>--` 或 `_no-cwd`。会话目录内可能并存历史代际文件（`session.jsonl[.zstd]`、`session.v1.jsonl[.zstd]` .. `session.v4.jsonl[.zstd]`）及锁文件 `session.lock`。
+- 压缩容器：`dsh-base` 默认使用 `compression: 'zstd'`（`.jsonl.zstd`），由多个独立带 XXH64 校验和的 Zstandard frame（magic `0xFD2FB528`）串联而成：首个 frame 固定为单行换行结尾的 session header，后续每个持久化追加批次各自构成一个 frame。`sdk-minimal` 等配置可使用 `compression: 'none'`（纯文本 `.jsonl`）。
+- 记录结构：首条 `type="session"`，含 `version`（当前 4）、`id`、`createdAt`（毫秒时间戳）、可选 `cwd`、`parentSession`、`isSeeded`、`origin`、`delegationDepth`、`agentPreset`。后续事件行含 `type`、`seq`、`time`、`data` 及可选 `sourceEventSeqs`/`surfaceOp`。核心事件包括 `user/message`（区分 `source.kind == "user"` 的真实用户提问与 `runtime-context` 等注入上下文）、`assistant/message`（`data.message.content` 含 `reasoning`、`text`、`tool-call` 块，另有 `stream` 与 `usage`）、`tool/call`、`tool/result`（`sourceEventSeqs` 指向对应 `tool/call` 的 `seq`）、`system/message`、`developer/message`、`session/title` 与 `working-directory/change`。
+- 实现：忽略 `session.lock` 与非规范文件名；同一会话目录存在多代文件时选取最高版本（同版本优先 `.jsonl.zstd`），并将同目录全部规范代际文件纳入 `Source.dependencies` 指纹。原生 Rust 流式校验并解压串联 Zstandard frames；若尾部 frame 未写完（崩溃截断），保留已提交前缀并记录 warning，首帧或中间损坏则报错。完整保留每条事件的原始 JSON。
+- 恢复：`dsh --profile headless --session-id <id>`，携带原项目工作目录和 `DSH_HOME`（要求来源目录满足 `<DSH_HOME>/sessions` 布局）。
 
 ## 安全降级与升级策略
 

@@ -1,0 +1,12 @@
+{
+  "checked_at": "2026-11-12T05:20:12.102890+00:00",
+  "session": "dsh:session-c911bfc2-4a78-4e1f-a8b5-a8088266f1a1",
+  "scope": "native load only; no model continuation or tool execution",
+  "version": "0.2.2-rc.1",
+  "probe": "native-dsh-sdk-rpc-from-agenthub-plan",
+  "original_id_confirmed": true,
+  "transcript_marker_seen": true,
+  "restored_cwd": "/tmp/agenthub-fixture-project",
+  "model_called": false,
+  "status": "passed"
+}

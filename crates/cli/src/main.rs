@@ -175,6 +175,14 @@ fn plan_for(store: &Store, record: &agenthub_index::SessionRecord) -> Result<Res
                 bail!("AGY does not expose a verified custom data-root flag; launch the matching AGY installation manually");
             }
         }
+        Agent::Dsh => {
+            if root.file_name().is_none_or(|s| s != "sessions") {
+                bail!("DeepSeek Harness resume requires the <DSH_HOME>/sessions directory layout");
+            }
+            if let Some(p) = root.parent() {
+                plan.env.push(("DSH_HOME".into(), p.into()));
+            }
+        }
     }
     Ok(plan)
 }
