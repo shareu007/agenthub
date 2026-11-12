@@ -1,0 +1,25 @@
+[package]
+name = "agenthub-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agenthub"
+path = "src/main.rs"
+
+[dependencies]
+agenthub-core.workspace = true
+agenthub-adapters.workspace = true
+agenthub-index.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+

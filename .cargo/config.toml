@@ -1,0 +1,4 @@
+[resolver]
+# Keep the documented Rust 1.85 minimum when resolving newer transitive releases.
+incompatible-rust-versions = "fallback"
+

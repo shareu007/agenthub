@@ -1,0 +1,12 @@
+# Copy to ~/.config/agenthub/config.toml. Relative paths resolve from the current
+# working directory; use absolute paths or ~/... for reproducible CLI invocations.
+# database = "~/.local/share/agenthub/index.db"
+
+[sources]
+# Each value is an existing agent store; AgentHub never writes to these paths.
+# claude = "~/.claude/projects"
+# codex = "~/.codex"  # contains sessions/ and archived_sessions/
+# opencode = "~/.local/share/opencode"  # or the opencode.db file itself
+# pi = "~/.pi/agent/sessions"
+# agy = "~/.gemini/antigravity-cli"
+
