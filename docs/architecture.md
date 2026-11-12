@@ -79,4 +79,4 @@ Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell �
 
 ## 8. 验证边界
 
-Rust 单元/集成测试已编写，但本环境没有 Rust 工具链且网络下载不可用，尚未运行；Linux/macOS CI 也尚未执行。`scripts/verify_sql.py` 可用 Python 标准库直接执行正式 schema 和查询，核验 FTS、中文短词、触发器、回滚、索引及数据库完整性，不能代替 Rust 编译或 Adapter 集成测试。没有在本环境启动真实 Agent 恢复会话。
+2026-11-12 在 Linux / Rust 1.85.0 下运行了 25 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。新增 Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；二者均通过真实 `resume --exec` 终端历史加载，Pi 另通过 RPC 身份及消息校验；未调用模型续聊。AGY、Claude 和 Codex 的真实恢复仍未验收，macOS / stable Rust 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。

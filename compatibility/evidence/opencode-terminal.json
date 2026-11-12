@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-11-12T02:32:31.131167+00:00",
+  "session": "opencode:ses_e326ec748ffePgLiZVEam9royd",
+  "scope": "native load only; no model continuation or tool execution",
+  "probe": "agenthub-resume-exec-terminal",
+  "transcript_marker_seen": true,
+  "output_sha256": "342531486cc0cc0d06dbf8c10c7d64119b4683a4923511c508460c525b2b0e6d",
+  "stopped_after_load": true,
+  "version": "1.19.5",
+  "status": "passed"
+}

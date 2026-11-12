@@ -19,9 +19,10 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo build --release --workspace
+      - run: cargo test --locked --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo build --locked --release --workspace
       - run: python3 scripts/verify_sql.py
+      - run: python3 scripts/verify_fixtures.py
       - run: ./target/release/agenthub --help
 

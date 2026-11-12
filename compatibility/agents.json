@@ -1,0 +1,43 @@
+{
+  "checked_at": "2026-11-12",
+  "platform": "linux-x86_64-glibc",
+  "agents": {
+    "agy": {
+      "version": null,
+      "distribution": "https://antigravity.google/docs/cli/using/",
+      "status": "blocked",
+      "reason": "No installed CLI, verified distribution/version or real sample; official docs denied by current runtime network policy",
+      "fixture": null
+    },
+    "claude": {
+      "version": "2.1.322",
+      "distribution": "@anthropic-ai/claude-code",
+      "status": "version-checked",
+      "reason": "CLI installed; no authenticated disposable native session",
+      "fixture": null
+    },
+    "codex": {
+      "version": "0.167.0-alpha.4",
+      "distribution": "platform-provided codex-cli",
+      "status": "version-checked",
+      "reason": "Preinstalled prerelease; no disposable native session; not a stable compatibility promise",
+      "fixture": null
+    },
+    "opencode": {
+      "version": "1.19.5",
+      "distribution": "opencode-linux-x64",
+      "status": "native-terminal-load",
+      "reason": "Native local API with noReply stored a user message; AgentHub resume --exec displayed its marker in real OpenCode terminal; no model called",
+      "fixture": "tests/fixtures/opencode/1.19.5.sql",
+      "fixture_sha256": "5737381a23424b19e039d8141e509971a396093f50c724c012fdc02c8f59006e"
+    },
+    "pi": {
+      "version": "1.5.2",
+      "distribution": "@earendil-works/pi-coding-agent",
+      "status": "native-terminal-and-rpc-load",
+      "reason": "Native SessionManager writer; AgentHub resume --exec displayed marker in real Pi terminal; Pi RPC confirmed original ID and 2 messages; no model called",
+      "fixture": "tests/fixtures/pi/1.5.2.jsonl",
+      "fixture_sha256": "c8c5a4939c2e7390a1dcb11999ce36b16bfb822d0c96d7fd019125455890a906"
+    }
+  }
+}

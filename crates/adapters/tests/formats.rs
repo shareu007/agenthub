@@ -177,3 +177,42 @@ fn active_partial_tail_is_deferred_but_internal_corruption_is_an_error() {
     write(&path,&format!("{header}broken\n{{}}\n"));
     assert!(a.read(&source,&mut Capture::default()).is_err());
 }
+
+#[test]
+fn pi_1_5_2_native_writer_fixture_preserves_identity_and_dialogue() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = include_str!("../../../tests/fixtures/pi/1.5.2.jsonl");
+    write(&dir.path().join("native.jsonl"), data);
+    let a = adapter(Agent::Pi, dir.path().into());
+    let source = a.discover().unwrap().sources.remove(0);
+    let mut capture = Capture::default();
+    a.read(&source, &mut capture).unwrap();
+    assert_eq!(capture.sessions[0].native_id, "01a1cd90-1c83-7753-bc2e-2d0c9bac8cf4");
+    assert_eq!(capture.messages.len(), 4);
+    assert_eq!(capture.messages[1].role, "user");
+    assert!(capture.messages[1].text.contains("AH_FIXTURE_20261112"));
+    assert_eq!(capture.messages[2].role, "assistant");
+    assert_eq!(capture.messages[2].parent_id, capture.messages[1].native_id);
+    assert_eq!(capture.messages[3].kind, "thinking_level_change");
+    assert_eq!(fs::read_to_string(&source.path).unwrap(), data);
+}
+
+#[test]
+fn opencode_1_19_5_native_api_fixture_keeps_stored_user_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("opencode.db");
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch(include_str!("../../../tests/fixtures/opencode/1.19.5.sql")).unwrap();
+    drop(c);
+    let before = fs::read(&path).unwrap();
+    let a = adapter(Agent::Opencode, dir.path().into());
+    let source = a.discover().unwrap().sources.remove(0);
+    let mut capture = Capture::default();
+    a.read(&source, &mut capture).unwrap();
+    assert_eq!(capture.sessions[0].native_id, "ses_e326ec748ffePgLiZVEam9royd");
+    assert_eq!(capture.messages.len(), 1);
+    assert_eq!(capture.messages[0].role, "user");
+    assert!(capture.messages[0].text.contains("AH_FIXTURE_20261112"));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(!dir.path().join("opencode.db-shm").exists());
+}

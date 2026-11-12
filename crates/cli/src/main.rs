@@ -5,9 +5,13 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
 use std::{collections::BTreeMap, env, fs, io::{self, Write}, path::{Path, PathBuf}, process::{Command, ExitCode}};
+mod ui;
+use ui::{cell, safe, Ui};
 
 #[derive(Parser)]
-#[command(name="agenthub", version, about="Read-only coding-agent session index (Linux / macOS)")]
+#[command(name="agenthub", version, about="Find, read, and resume your coding-agent sessions",
+    long_about="A local, read-only session index for Claude Code, Codex, OpenCode, Pi, and AGY.\nRuns on demand on Linux and macOS. Native agents are launched only with resume --exec.",
+    after_help="QUICK START:\n  agenthub doctor\n  agenthub sync\n  agenthub list --agent codex\n  agenthub search \"rendering\" --project /path/to/project\n  agenthub show codex:SESSION_ID\n  agenthub resume codex:SESSION_ID --exec\n\nUse --json for scripts. Date filters and displayed times use UTC.")]
 struct Cli {
     /// Index path; never point this at an agent database.
     #[arg(long, global=true, env="AGENTHUB_DB")]
@@ -18,6 +22,9 @@ struct Cli {
     /// Machine-readable output. `show` streams JSON Lines.
     #[arg(long, global=true)]
     json: bool,
+    /// Color for human output; auto respects NO_COLOR, TERM=dumb, and redirected stdout.
+    #[arg(long, global=true, value_enum, default_value="auto")]
+    color: ui::Color,
     #[command(subcommand)]
     command: Action,
 }
@@ -126,11 +133,6 @@ fn parse_time(s: &str) -> Result<i64> {
     bail!("invalid time {s:?}: use RFC3339, YYYY-MM-DD (UTC), or epoch milliseconds")
 }
 
-fn safe(text: &str) -> String {
-    // Sessions are untrusted terminal content; preserve only printable text and line breaks.
-    text.chars().filter(|c| !c.is_control() || matches!(c,'\n'|'\t')).collect()
-}
-fn cell(text: &str) -> String { safe(text).replace(['\n','\t']," ") }
 fn quote(s: &str) -> String { format!("'{}'",s.replace('\'',"'\\''")) }
 fn display_plan(plan: &ResumeCommand) -> String {
     let mut s = String::new();
@@ -173,6 +175,7 @@ fn plan_for(store: &Store, record: &agenthub_index::SessionRecord) -> Result<Res
 
 fn run(cli: Cli) -> Result<bool> {
     let settings = Settings::load(&cli)?;
+    let ui = Ui::new(cli.color, cli.json);
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     if matches!(&cli.command,Action::Doctor) {
@@ -188,16 +191,25 @@ fn run(cli: Cli) -> Result<bool> {
         }
         if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&results)?)?; }
         else {
-            writeln!(out,"Index: {}",cell(&settings.db.to_string_lossy()))?;
-            for r in results { writeln!(out,"{}\t{}\tsources={}\tbinary={}\terror={}",r["agent"].as_str().unwrap_or(""),cell(r["root"].as_str().unwrap_or("")),r["sources"],r["binary"],r["error"])?; }
+            writeln!(out,"{}\nIndex: {}\n",ui.heading("AgentHub · Source health"),cell(&settings.db.to_string_lossy()))?;
+            for r in &results {
+                let status = if !r["error"].is_null() { "ERROR" } else if !r["warnings"].as_array().is_none_or(Vec::is_empty) { "WARNING" } else if r["exists"] == false { "NOT FOUND" } else { "READY" };
+                writeln!(out,"{}  {status} · {} source(s)",ui.heading(r["agent"].as_str().unwrap_or("")),r["sources"])?;
+                writeln!(out,"  Source: {}\n  Native CLI: {}",cell(r["root"].as_str().unwrap_or("")),cell(r["binary"].as_str().unwrap_or("not installed (needed only for resume --exec)")))?;
+                if let Some(e) = r["error"].as_str() { writeln!(out,"  Error: {}",cell(e))?; }
+                if let Some(warnings) = r["warnings"].as_array() { for w in warnings { writeln!(out,"  Warning: {}",cell(w.as_str().unwrap_or("")))?; } }
+                writeln!(out)?;
+            }
+            writeln!(out,"Checks discovery only; does not verify format compatibility, login, or native recovery.\nNext: agenthub sync")?;
         }
-        return Ok(true);
+        return Ok(results.iter().all(|r| r["error"].is_null() && r["warnings"].as_array().is_none_or(Vec::is_empty)));
     }
     let mut store = Store::open(&settings.db)?;
     match cli.command {
         Action::Sync { agent,force } => {
             let mut reports = BTreeMap::new();
             let mut success = true;
+            if !cli.json { writeln!(out,"{}\n",ui.heading("AgentHub · Sync"))?; }
             for selected in Agent::ALL.into_iter().filter(|a| agent.is_none_or(|f| f == *a)) {
                 let a = adapter(selected,settings.root(selected)?);
                 let report = match store.sync(a.as_ref(),force) {
@@ -206,13 +218,15 @@ fn run(cli: Cli) -> Result<bool> {
                 };
                 success &= report.errors.is_empty();
                 if !cli.json {
-                    writeln!(out,"{selected}: discovered={} indexed={} unchanged={} missing={}",report.discovered,report.indexed,report.unchanged,report.missing)?;
+                    let status = if report.errors.is_empty() { "OK" } else { "ERROR" };
+                    writeln!(out,"{selected:<9} {status:<5} {} indexed · {} unchanged · {} missing · {} discovered",report.indexed,report.unchanged,report.missing,report.discovered)?;
                     for warning in &report.warnings { eprintln!("warning: {}",cell(warning)); }
                     for error in &report.errors { eprintln!("error: {}",cell(error)); }
                 }
                 reports.insert(selected.to_string(),report);
             }
             if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&reports)?)?; }
+            else { writeln!(out,"\n{}\nNext: agenthub list",if success { "Sync complete." } else { "Sync incomplete. Failed sources retain their last successful index; see errors above." })?; }
             out.flush()?;
             return Ok(success);
         }
@@ -220,15 +234,27 @@ fn run(cli: Cli) -> Result<bool> {
             let records = store.list(&selection.filter()?)?;
             if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&records)?)?; }
             else {
-                writeln!(out,"KEY\tUPDATED(ms)\tRECORDS\tAVAILABLE\tPROJECT\tTITLE")?;
-                for record in records { let s=record.session; writeln!(out,"{}\t{}\t{}\t{}\t{}\t{}",cell(&s.key),s.updated_at.map(|v|v.to_string()).unwrap_or_default(),record.message_count,record.available,cell(&s.project_path.unwrap_or_default().to_string_lossy()),cell(&s.title))?; }
+                writeln!(out,"{} · {} shown\n",ui.heading("AgentHub · Sessions"),records.len())?;
+                if records.is_empty() { writeln!(out,"No sessions match. Run agenthub sync, or adjust your filters.\nUse --include-missing to include cached sessions whose sources disappeared.")?; }
+                for record in &records {
+                    let s = &record.session;
+                    writeln!(out,"{}  {}",ui.heading(&s.key),cell(&s.title))?;
+                    writeln!(out,"  {} · {} records · {}",ui::time(s.updated_at),record.message_count,if record.available { "source available" } else { "cached only" })?;
+                    writeln!(out,"  Project: {}\n",cell(&s.project_path.as_deref().map(|p|p.to_string_lossy()).unwrap_or_default()))?;
+                }
+                if !records.is_empty() {
+                    writeln!(out,"View: agenthub show <agent:id>\nResume: agenthub resume <agent:id> --exec")?;
+                    if records.len() == selection.limit as usize { writeln!(out,"Next page (keep your filters): --offset {} --limit {}",u64::from(selection.offset)+u64::from(selection.limit),selection.limit)?; }
+                }
             }
         }
         Action::Show { id,raw,offset,limit } => {
             let record = store.find(&id)?;
             if cli.json { writeln!(out,"{}",serde_json::json!({"type":"session","session":record}))?; }
-            else {
-                writeln!(out,"{} — {}",cell(&record.session.key),cell(&record.session.title))?;
+            else if !raw {
+                writeln!(out,"{}  {}",ui.heading(&record.session.key),cell(&record.session.title))?;
+                writeln!(out,"Updated: {} · {} records",ui::time(record.session.updated_at),record.message_count)?;
+                writeln!(out,"Project: {}",cell(&record.session.project_path.as_deref().map(|p|p.to_string_lossy()).unwrap_or_default()))?;
                 if !record.available { writeln!(out,"[original source unavailable; showing cached history]")?; }
                 for warning in &record.session.warnings { writeln!(out,"[{}]",cell(warning))?; }
             }
@@ -236,7 +262,7 @@ fn run(cli: Cli) -> Result<bool> {
                 if cli.json { writeln!(out,"{}",serde_json::json!({"type":"message","message":message}))?; }
                 else if raw { writeln!(out,"{}",serde_json::to_string(&message.raw)?)?; }
                 else {
-                    writeln!(out,"\n[{}] {} ({})",message.ordinal,cell(&message.role),cell(&message.kind))?;
+                    writeln!(out,"\n{} · #{} · {} · {}",ui.heading(&message.role.to_uppercase()),message.ordinal,cell(&message.kind),ui::time(message.timestamp))?;
                     writeln!(out,"{}",safe(&message.text))?;
                 }
                 Ok(())
@@ -245,7 +271,13 @@ fn run(cli: Cli) -> Result<bool> {
         Action::Search { query,selection } => {
             let hits = store.search(&query,&selection.filter()?)?;
             if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&hits)?)?; }
-            else { for h in hits { writeln!(out,"{}\t#{}\t{}\n{}\n",cell(&h.key),h.ordinal,cell(&h.title),safe(&h.excerpt))?; } }
+            else {
+                writeln!(out,"{} · {} hit(s) for {:?}\n",ui.heading("AgentHub · Search"),hits.len(),cell(&query))?;
+                if hits.is_empty() { writeln!(out,"No matches. Try a shorter keyword, adjust filters, or run agenthub sync.")?; }
+                for h in &hits { writeln!(out,"{} · {}  {}\n{}\n",ui.heading(&h.key),if h.ordinal < 0 { "title/project".into() } else { format!("record #{}",h.ordinal) },cell(&h.title),safe(&h.excerpt))?; }
+                if !hits.is_empty() { writeln!(out,"Read context: agenthub show <agent:id>")?; }
+                if hits.len() == selection.limit as usize { writeln!(out,"Next page (keep your query and filters): --offset {} --limit {}",u64::from(selection.offset)+u64::from(selection.limit),selection.limit)?; }
+            }
         }
         Action::Resume { id,execute } => {
             let record = store.find(&id)?;

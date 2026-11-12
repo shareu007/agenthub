@@ -41,3 +41,76 @@ fn isolated_cli_sync_search_show_and_resume_plan() {
     assert!(run(&config,&["doctor"]).status.success());
     assert!(!home.join("index.db").exists());
 }
+
+fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join("pi")).unwrap();
+    fs::write(root.join("pi/session.jsonl"), concat!(
+        "{\"type\":\"session\",\"id\":\"ui\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
+        "{\"type\":\"message\",\"timestamp\":\"2026-01-02T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"修复渲染问题\\u001b[31m\"}}\n"
+    )).unwrap();
+    let config = root.join("config.toml");
+    let mut text = format!("database = {:?}\n[sources]\n", root.join("index.db"));
+    for agent in ["claude", "codex", "opencode", "pi", "agy"] {
+        text.push_str(&format!("{agent} = {:?}\n", root.join(agent)));
+    }
+    fs::write(&config, text).unwrap();
+    (dir, config)
+}
+
+#[test]
+fn human_output_is_readable_and_json_stays_machine_readable() {
+    let (_dir, config) = fixture();
+    let empty = run(&config, &["list"]);
+    assert!(String::from_utf8(empty.stdout).unwrap().contains("No sessions match"));
+    assert!(run(&config, &["sync"]).status.success());
+    let listing = run(&config, &["list", "--limit", "1"]);
+    let listing = String::from_utf8(listing.stdout).unwrap();
+    assert!(listing.contains("pi:ui") && listing.contains("2026-01-02 00:00:00 UTC"));
+    assert!(listing.contains("--offset 1 --limit 1"));
+    assert!(!listing.contains('\u{1b}'));
+    let colored = run(&config, &["list", "--color", "always"]);
+    assert!(colored.stdout.contains(&0x1b));
+    let json = run(&config, &["list", "--color", "always", "--json"]);
+    assert!(!json.stdout.contains(&0x1b));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(rows[0]["key"], "pi:ui");
+    let show = run(&config, &["show", "pi:ui", "--color", "never"]);
+    let show = String::from_utf8(show.stdout).unwrap();
+    assert!(show.contains("USER · #1") && show.contains("2 records"));
+    assert!(!show.contains('\u{1b}'));
+    let search = run(&config, &["search", "no-match"]);
+    assert!(String::from_utf8(search.stdout).unwrap().contains("No matches"));
+    let raw = run(&config, &["show", "pi:ui", "--raw"]);
+    for line in String::from_utf8(raw.stdout).unwrap().lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(record.get("type").is_some());
+    }
+}
+
+#[test]
+fn doctor_reports_discovery_failures_in_text_and_json_with_failure_exit() {
+    let (dir, config) = fixture();
+    let path = dir.path().join("opencode/storage/session/project");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("broken.json"), "not JSON").unwrap();
+    let result = run(&config, &["doctor"]);
+    assert!(!result.status.success());
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(text.contains("ERROR") && text.contains("Error:"));
+    let result = run(&config, &["doctor", "--json"]);
+    assert!(!result.status.success());
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(rows.iter().any(|r| r["agent"] == "opencode" && !r["error"].is_null()));
+    assert!(!dir.path().join("index.db").exists());
+}
+
+#[test]
+fn help_gives_a_workflow_without_accessing_configuration() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agenthub"))
+        .args(["--config", "/missing/agenthub/config.toml", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("QUICK START") && help.contains("--json") && help.contains("--exec"));
+}

@@ -1,0 +1,12 @@
+{
+  "checked_at": "2026-11-12T02:32:29.310237+00:00",
+  "session": "pi:01a1cd90-1c83-7753-bc2e-2d0c9bac8cf4",
+  "scope": "native load only; no model continuation or tool execution",
+  "version": "1.5.2",
+  "probe": "native-pi-rpc-from-agenthub-plan",
+  "original_id_confirmed": true,
+  "transcript_marker_seen": true,
+  "message_count": 2,
+  "model_called": false,
+  "status": "passed"
+}
