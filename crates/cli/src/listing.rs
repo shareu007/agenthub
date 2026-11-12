@@ -290,15 +290,13 @@ fn agent_bar(
     width: usize,
     ui: &Ui,
 ) -> String {
-    // All categories remain visible even with no indexed sessions. Each slot gets
-    // a bounded display width, rather than letting an earlier category clip others.
+    // Keep a two-space gap instead of stretching tabs across the terminal.
+    // Cap each item on narrow screens so all categories remain reachable.
     let slot = width / range.len();
     range
         .map(|i| {
-            let text = padded(
-                &format!("{} {}:{}", i, LABELS[i], page.total(AGENTS[i])),
-                slot,
-            );
+            let label = format!("{} {}:{}", i, LABELS[i], page.total(AGENTS[i]));
+            let text = padded(&label, (label.len() + 2).min(slot));
             if AGENTS[i] == selected {
                 ui.selected(&text)
             } else {
