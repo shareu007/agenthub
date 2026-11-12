@@ -28,10 +28,11 @@ impl Ui {
         let value = cell(value);
         if self.color { format!("\x1b[{code}m{value}\x1b[0m") } else { value }
     }
-    pub fn bar(&self, value: &str) -> String { self.paint(value, "1;97;44") }
-    pub fn selected(&self, value: &str) -> String { self.paint(value, "1;30;46") }
-    pub fn title(&self, value: &str) -> String { self.paint(value, "1;93") }
+    pub fn bar(&self, value: &str) -> String { self.paint(value, "1;4") }
+    pub fn selected(&self, value: &str) -> String { self.paint(value, "1;7") }
+    pub fn title(&self, value: &str) -> String { self.paint(value, "1") }
     pub fn dim(&self, value: &str) -> String { self.paint(value, "90") }
+    pub fn metric(&self, value: &str) -> String { self.paint(value, "32") }
     pub fn error(&self, value: &str) -> String { self.paint(value, "1;91") }
 }
 
@@ -44,4 +45,13 @@ pub fn time(value: Option<i64>) -> String {
     value.and_then(DateTime::<Utc>::from_timestamp_millis)
         .map(|v| v.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "unknown time".into())
+}
+
+/// Logical native-record bytes; stable across JSONL and shared database stores.
+pub fn size(bytes: i64) -> String {
+    let bytes = bytes.max(0) as f64;
+    if bytes >= 1024.0 * 1024.0 * 1024.0 { format!("{:.1} GiB", bytes / (1024.0 * 1024.0 * 1024.0)) }
+    else if bytes >= 1024.0 * 1024.0 { format!("{:.1} MiB", bytes / (1024.0 * 1024.0)) }
+    else if bytes >= 1024.0 { format!("{:.1} KiB", bytes / 1024.0) }
+    else { format!("{bytes:.0} B") }
 }

@@ -8,6 +8,8 @@ use std::{collections::BTreeMap, env, fs, io::{self, Write}, path::{Path, PathBu
 mod ui;
 mod listing;
 mod transfer;
+mod launch;
+mod management;
 use ui::{cell, safe, Ui};
 
 #[derive(Parser)]
@@ -38,6 +40,8 @@ enum Action {
         #[arg(long)] agent: Option<Agent>,
         /// Ignore source fingerprints and reparse all selected sources.
         #[arg(long)] force: bool,
+        /// Also read historical stores whose native CLI is not installed/on PATH.
+        #[arg(long)] include_unavailable: bool,
     },
     /// Browse indexed sessions. In a terminal, select and press Enter to resume.
     List(listing::ListArgs),
@@ -52,10 +56,28 @@ enum Action {
     /// Literal substring search across titles, project paths, and conversation text.
     Search { query: String, #[command(flatten)] selection: Selection },
     /// Print the native resume command, or run it with --exec.
-    Resume { id: String, #[arg(long="exec")] execute: bool },
+    Resume {
+        id: String,
+        #[arg(long="exec")] execute: bool,
+        /// Existing project directory after moving/renaming the original project.
+        #[arg(long)] cwd: Option<PathBuf>,
+    },
     /// Copy user/assistant text into a NEW native session of another agent.
     #[command(alias="convert")]
     Transfer(transfer::TransferArgs),
+    /// Set a persistent AgentHub display title without rewriting native files.
+    Rename {
+        id: String,
+        #[arg(required_unless_present="reset", conflicts_with="reset")] title: Option<String>,
+        /// Restore the native title.
+        #[arg(long)] reset: bool,
+    },
+    /// Permanently delete a native session and its indexed transcript.
+    Delete {
+        id: String,
+        /// Confirm irreversible deletion. Without this, only show a preview.
+        #[arg(long)] yes: bool,
+    },
     /// Inspect source paths, read capabilities, and installed native executables.
     Doctor,
 }
@@ -162,11 +184,16 @@ fn display_plan(plan: &ResumeCommand) -> String {
     s
 }
 
-fn plan_for(store: &Store, record: &agenthub_index::SessionRecord) -> Result<ResumeCommand> {
+fn plan_for(store: &Store, record: &agenthub_index::SessionRecord, cwd: Option<PathBuf>) -> Result<ResumeCommand> {
     if !record.available { bail!("source is unavailable; locate the original session and run sync before resuming"); }
     let s = &record.session;
     if !s.source_path.try_exists()? { bail!("original session no longer exists; run sync to refresh availability"); }
     let mut plan = resume_command(s)?;
+    if let Some(cwd) = cwd {
+        let home=env::var_os("HOME").map(PathBuf::from).context("HOME must be set")?;
+        plan.cwd=Some(absolute(&cwd,&home)?);
+    }
+    launch::validate_cwd(plan.cwd.as_deref())?;
     let root = store.source_root(&s.key)?;
     // Honor the indexed agent installation, even when the CLI's current environment differs.
     match s.agent {
@@ -198,15 +225,17 @@ fn run(cli: Cli) -> Result<bool> {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     if matches!(&cli.command,Some(Action::Doctor)) {
-        let paths = env::var_os("PATH").map(|v| env::split_paths(&v).collect::<Vec<_>>()).unwrap_or_default();
+        let path = launch::absolute_path()?;
         let mut results = Vec::new();
         for agent in Agent::ALL {
             let root = settings.root(agent)?;
             let a = adapter(agent,root.clone());
             let discovery = a.discover();
             let (count,warnings,error) = match discovery { Ok(d) => (d.sources.len(),d.warnings,None),Err(e) => (0,vec![],Some(format!("{e:#}"))) };
-            let binary = paths.iter().map(|p| p.join(agent.as_str())).find(|p| p.is_file());
-            results.push(serde_json::json!({"agent":agent,"root":root,"exists":root.try_exists()?,"sources":count,"binary":binary,"warnings":warnings,"error":error}));
+            let resolved = launch::resolve(agent.as_str(),&path);
+            let binary_error = resolved.as_ref().err().map(|e|format!("{e:#}"));
+            let binary = resolved.ok();
+            results.push(serde_json::json!({"agent":agent,"root":root,"exists":root.try_exists()?,"sources":count,"binary":binary,"binary_error":binary_error,"warnings":warnings,"error":error}));
         }
         if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&results)?)?; }
         else {
@@ -215,6 +244,7 @@ fn run(cli: Cli) -> Result<bool> {
                 let status = if !r["error"].is_null() { "ERROR" } else if !r["warnings"].as_array().is_none_or(Vec::is_empty) { "WARNING" } else if r["exists"] == false { "NOT FOUND" } else { "READY" };
                 writeln!(out,"{}  {status} · {} source(s)",ui.heading(r["agent"].as_str().unwrap_or("")),r["sources"])?;
                 writeln!(out,"  Source: {}\n  Native CLI: {}",cell(r["root"].as_str().unwrap_or("")),cell(r["binary"].as_str().unwrap_or("not installed (needed only for resume --exec)")))?;
+                if let Some(e) = r["binary_error"].as_str() { writeln!(out,"  Native CLI detail: {}",cell(e))?; }
                 if let Some(e) = r["error"].as_str() { writeln!(out,"  Error: {}",cell(e))?; }
                 if let Some(warnings) = r["warnings"].as_array() { for w in warnings { writeln!(out,"  Warning: {}",cell(w.as_str().unwrap_or("")))?; } }
                 writeln!(out)?;
@@ -225,11 +255,23 @@ fn run(cli: Cli) -> Result<bool> {
     }
     let mut store = Store::open(&settings.db)?;
     match cli.command.unwrap_or_else(|| Action::List(listing::ListArgs::default())) {
-        Action::Sync { agent,force } => {
+        Action::Sync { agent,force,include_unavailable } => {
             let mut reports = BTreeMap::new();
             let mut success = true;
+            let mut attempted = 0usize;
+            let path = launch::absolute_path()?;
             if !cli.json { writeln!(out,"{}\n",ui.heading("AgentHub · Sync"))?; }
             for selected in Agent::ALL.into_iter().filter(|a| agent.is_none_or(|f| f == *a)) {
+                if !include_unavailable {
+                    if let Err(error) = launch::resolve(selected.as_str(),&path) {
+                        let reason=format!("{error:#}");
+                        let errors=if agent.is_some() { success=false; vec![reason.clone()] } else { vec![] };
+                        reports.insert(selected.to_string(),serde_json::json!({"discovered":0,"indexed":0,"unchanged":0,"missing":0,"warnings":[],"errors":errors,"skipped":reason}));
+                        if !cli.json { writeln!(out,"{selected:<9} {:<5} native CLI unavailable; skipped (history retained)",if agent.is_some() {"ERROR"} else {"SKIP"})?; }
+                        continue;
+                    }
+                }
+                attempted += 1;
                 let a = adapter(selected,settings.root(selected)?);
                 let report = match store.sync(a.as_ref(),force) {
                     Ok(r) => r,
@@ -242,10 +284,10 @@ fn run(cli: Cli) -> Result<bool> {
                     for warning in &report.warnings { eprintln!("warning: {}",cell(warning)); }
                     for error in &report.errors { eprintln!("error: {}",cell(error)); }
                 }
-                reports.insert(selected.to_string(),report);
+                reports.insert(selected.to_string(),serde_json::to_value(report)?);
             }
             if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&reports)?)?; }
-            else { writeln!(out,"\n{}\nNext: agenthub list",if success { "Sync complete." } else { "Sync incomplete. Failed sources retain their last successful index; see errors above." })?; }
+            else { writeln!(out,"\n{}\nNext: agenthub list",if !success { "Sync incomplete. Failed sources retain their last successful index; see errors above." } else if attempted==0 { "No native agent CLI available to sync. Run ah doctor; use --include-unavailable only to import offline history." } else { "Sync complete for available agents." })?; }
             out.flush()?;
             return Ok(success);
         }
@@ -293,9 +335,9 @@ fn run(cli: Cli) -> Result<bool> {
                 if hits.len() == selection.limit as usize { writeln!(out,"Next page (keep your query and filters): --offset {} --limit {}",u64::from(selection.offset)+u64::from(selection.limit),selection.limit)?; }
             }
         }
-        Action::Resume { id,execute } => {
+        Action::Resume { id,execute,cwd } => {
             let record = store.find(&id)?;
-            let plan = plan_for(&store,&record)?;
+            let plan = plan_for(&store,&record,cwd)?;
             if !execute {
                 if cli.json { writeln!(out,"{}",serde_json::to_string_pretty(&plan)?)?; }
                 else { writeln!(out,"{}",display_plan(&plan))?; }
@@ -317,6 +359,26 @@ fn run(cli: Cli) -> Result<bool> {
                 else { transfer::receipt(&mut out, &receipt)?; }
             }
         }
+        Action::Rename { id, title, reset } => {
+            let record = store.find(&id)?;
+            store.rename(&record.session.key, if reset { None } else { title.as_deref() })?;
+            let record = store.find(&record.session.key)?;
+            if cli.json { writeln!(out,"{}",serde_json::to_string(&record)?)?; }
+            else { writeln!(out,"Renamed {}: {}",cell(&record.session.key),cell(&record.session.title))?; }
+        }
+        Action::Delete { id, yes } => {
+            let record = store.find(&id)?;
+            if !yes { management::check_delete(&store, &record.session.key)?; }
+            if yes {
+                management::delete(&mut store, &record.session.key)?;
+                if cli.json { writeln!(out,"{}",serde_json::json!({"deleted":record.session.key}))?; }
+                else { writeln!(out,"Permanently deleted {}",cell(&record.session.key))?; }
+            } else if cli.json {
+                writeln!(out,"{}",serde_json::json!({"dry_run":true,"session":record,"confirm":"delete <agent:id> --yes"}))?;
+            } else {
+                writeln!(out,"PERMANENT DELETE {}\nTitle: {}\nNative source: {}\nDeletes native session and indexed transcript. Cannot undo. Stop the session in its native agent first.\nTo confirm: agenthub delete {} --yes",cell(&record.session.key),cell(&record.session.title),cell(&record.session.source_path.to_string_lossy()),cell(&record.session.key))?;
+            }
+        }
         Action::Doctor => unreachable!(),
     }
     out.flush()?;
@@ -324,12 +386,16 @@ fn run(cli: Cli) -> Result<bool> {
 }
 
 fn execute_plan(plan: ResumeCommand) -> Result<bool> {
-    let mut command = Command::new(&plan.program);
+    launch::validate_cwd(plan.cwd.as_deref())?;
+    let path = launch::absolute_path()?;
+    let executable = launch::resolve(&plan.program,&path)?;
+    let mut command = Command::new(&executable);
+    command.env("PATH",path);
     command.args(&plan.args);
     for (key, value) in &plan.env { command.env(key, value); }
     if let Some(cwd) = &plan.cwd { command.current_dir(cwd); }
     #[cfg(unix)]
-    { use std::os::unix::process::CommandExt; Err(command.exec()).with_context(|| format!("launch {}; check that the native CLI is installed and on PATH", plan.program)) }
+    { use std::os::unix::process::CommandExt; Err(command.exec()).with_context(|| format!("found {} at {}, but could not launch it in {}; check directory access and the executable's shebang interpreter/dynamic loader", plan.program,executable.display(),plan.cwd.as_deref().map(|p|p.to_string_lossy()).unwrap_or_else(||"current directory".into()))) }
     #[cfg(not(unix))]
     { Ok(command.status()?.success()) }
 }

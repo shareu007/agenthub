@@ -98,7 +98,7 @@ def main():
         stub.chmod(0o755)
         environment = dict(os.environ, TERM='xterm-256color',
                            PATH=str(bindir)+os.pathsep+os.environ['PATH'], AGENTHUB_TEST_RESULT=str(result_file))
-        subprocess.run([binaries[0], '--config', str(config), 'sync', '--json'], check=True, capture_output=True)
+        subprocess.run([binaries[0], '--config', str(config), 'sync', '--include-unavailable', '--json'], check=True, capture_output=True)
         for binary in binaries:
             base = [binary, '--config', str(config), '--color', 'always']
             code, output = terminal(base, environment, [(b'Enter: resume', b'\x1b[B\r')])
@@ -134,7 +134,7 @@ def main():
             for agent, count in [('agy', 60), ('claude', 1), ('codex', 1), ('opencode', 1)]:
                 for i in range(count):
                     key = f'{agent}:seed{i}'
-                    db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    db.execute('INSERT INTO sessions(key,native_id,agent,source_id,title,project_path,created_at,updated_at,source_path,parent_id,warnings,available,message_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                (key, f'seed{i}', agent, sid, 'Hidden '+agent.title(), str(project), 1, 2,
                                 str(root/f'{agent}-synthetic-source'), None, '[]', 1, 1))
                     if agent == 'claude':
@@ -142,13 +142,15 @@ def main():
                                    (key, 'BODY_ONLY_RENDER_TOKEN_1983 渲染猫 LONG_SEARCH_'+'x'*72+'_END'))
         for binary in binaries:
             base = [binary, '--config', str(config), '--color', 'always']
-            code, output = terminal(base, environment, [(b'Enter: resume', b'2'),
+            code, output = terminal(base, environment, [(b'Enter: resume', b'4'), (b'agent=pi', b'2'),
                                                         (b'agent=codex', b'q')])
             assert code == 0 and b'Hidden Codex' in output
             for label in [b'1 Claude:1', b'2 Codex:1', b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']:
                 assert label in output, (label, output)
             # Important headings and the selected row receive explicit styles.
-            assert b'\x1b[1;93m' in output and b'\x1b[1;30;46m' in output
+            assert b'\x1b[1m' in output and b'\x1b[1;7m' in output
+            assert b'\x1b[1;97;44m' not in output and b'\x1b[1;30;46m' not in output
+            assert b'\x1b[32m' in output and b'\x1b[90m' in output
             code, output = terminal(base, environment, [(b'Enter: resume', b'/'),
                 (b'Ctrl-U clear', b'BODY_ONLY_RENDER_TOKEN_1983'),
                 (b'1 matches', b'\r'), (b'Search: /BODY_ONLY_RENDER_TOKEN_1983', b'q')])
@@ -174,19 +176,56 @@ def main():
             before = set(source.rglob('*.jsonl'))
             code, _ = terminal(base, environment, [(b'Enter: resume', b'4'),
                 (b'agent=pi', b't'), (b'SESSION TRANSFER', b'4'),
-                (b'confirm transfer', b'\x1b'), (b'Enter: resume', b'q')])
+                (b'confirm transfer', b'\x1b'), (b'0-5 agent', b'q')])
             assert code == 0 and set(source.rglob('*.jsonl')) == before
             print(Path(binary).name+': all five tabs, >50-row counts, global body/Unicode search, search cancellation and transfer preview passed')
+        unavailable_env = dict(environment, PATH='')
+        code, output = terminal([binaries[0], '--config', str(config), 'list', '--agent', 'pi'], unavailable_env,
+            [(b'Enter: resume', b'\r'), (b'Cannot resume: native executable', b'q')])
+        assert code == 0 and b'[CLI missing]' in output and not result_file.exists()
+        # A transferred session must be selected even when it belongs on a later
+        # data page under reverse size sorting and the source has restrictive filters.
+        with sqlite3.connect(root/'index.db') as db:
+            db.execute("UPDATE sessions SET size_bytes=1 WHERE key='codex:seed0'")
+        original_sources = {p: p.read_bytes() for p in source.glob('*.jsonl')}
+        code, output = terminal([binaries[0], '--config', str(config), '--color', 'always',
+            'list', '--agent', 'pi', '--limit', '1', '--sort', 'size', '--reverse',
+            '--project', str(project), '--until', '2026-02-01'], environment,
+            [(b'Enter: resume', b't'), (b'SESSION TRANSFER', b'2'),
+             (b'confirm transfer', b'y'), (b'Created codex:', b'q')])
+        assert code == 0 and b'offset 1' in output and b'SIZE' in output
+        assert b'filters cleared' in output
+        assert all(p.read_bytes() == content for p, content in original_sources.items())
+        # Persistent rename includes q as text, supports clear, and refreshes list.
+        for binary in binaries:
+            base = [binary, '--config', str(config), 'list', '--agent', 'pi', '--color', 'always']
+            code, output = terminal(base, environment, [(b'Enter: resume', b'e'),
+                (b'RENAME pi:b', b'\x15Custom q title'), (b'Title: Custom q title', b'\r'),
+                (b'Renamed pi:b', b'q')])
+            assert code == 0 and b'Custom q title' in output
+            # Delete cancellation and incorrect confirmation must preserve source.
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'd'),
+                (b'PERMANENT DELETE pi:b', b'WRONG\r'), (b'Confirm: WRONG', b'\x1b'), (b'0-5 agent', b'q')])
+            assert code == 0 and (source/'b.jsonl').exists()
+            # Stop before confirming on this shared test session; final destructive
+            # PTY check below uses the last native file exactly once.
+        code, output = terminal([binaries[0], '--config', str(config), 'list', '--agent', 'pi'], environment,
+            [(b'Enter: resume', b'd'), (b'PERMANENT DELETE pi:b', b'DELETE\r'),
+             (b'Permanently deleted pi:b', b'q')])
+        assert code == 0 and not (source/'b.jsonl').exists()
+        with sqlite3.connect(root/'index.db') as db:
+            assert db.execute("SELECT count(*) FROM sessions WHERE key='pi:b'").fetchone()[0] == 0
+        print('Transfer focuses the correct size-sorted page; persistent rename and confirmed/cancelled native deletion passed')
         original_sources = {p: p.read_bytes() for p in source.glob('*.jsonl')}
         code, output = terminal([binaries[0], '--config', str(config), '--color', 'always'], environment,
             [(b'Enter: resume', b'4'), (b'agent=pi', b't'),
              (b'SESSION TRANSFER', b'2'), (b'confirm transfer', b'y'),
              (b'Created codex:', b'q')])
-        assert code == 0 and len(list((root/'codex').rglob('*.jsonl'))) == 1
+        assert code == 0 and len(list((root/'codex').rglob('*.jsonl'))) == 2
         assert all(p.read_bytes() == content for p, content in original_sources.items())
         code, output = terminal([binaries[0], '--config', str(config), '--color', 'never'], environment,
                                 [(b'Enter: resume', b'q')])
-        assert code == 0 and b'\x1b[1;93m' not in output and b'\x1b[1;30;46m' not in output
+        assert code == 0 and b'\x1b[1m' not in output and b'\x1b[1;7m' not in output
         print('Confirmed terminal transfer creates a new Codex session, preserves sources, and no-color is honored')
         db.execute('UPDATE sessions SET title=? WHERE key=?', ('Huge '+chr(0x301)*10000, 'agy:seed0'))
         db.commit()
@@ -196,8 +235,7 @@ def main():
         print('Pathological zero-width title remains bounded in terminal output')
         db.close()
         # Also check an empty list on a tiny terminal can be dismissed.
-        (root/'index.db').unlink()
-        code, _ = terminal([binaries[0], '--config', str(config)], environment, [(b'Enter: resume', b'q')], size=(10, 100))
+        code, _ = terminal([binaries[0], '--config', str(config), '--db', str(root/'empty.db')], environment, [(b'Enter: resume', b'q')], size=(10, 100))
         assert code == 0
     print('PTY selector checks passed (native process stub, not native-agent recovery).')
 

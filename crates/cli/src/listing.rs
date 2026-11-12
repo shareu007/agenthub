@@ -1,6 +1,6 @@
 //! Grouped output and an on-demand terminal selector; never used for JSON/pipes.
 use crate::{
-    plan_for, transfer,
+    launch, management, plan_for, transfer,
     ui::{self, cell, Ui},
     Selection, Settings,
 };
@@ -28,6 +28,7 @@ pub enum Sort {
     Created,
     Agent,
     Project,
+    Size,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum Group {
@@ -44,7 +45,7 @@ pub struct ListArgs {
     /// Classify sessions before sorting (default: agent).
     #[arg(long, value_enum, default_value = "agent")]
     pub group_by: Group,
-    /// Order within each group. Time/created: newest first; agent/project: A-Z.
+    /// Order within each group. Time/created: newest first; size: largest first; agent/project: A-Z.
     #[arg(long, value_enum, default_value = "time")]
     pub sort: Sort,
     /// Reverse the selected sort direction (groups remain A-Z).
@@ -70,6 +71,7 @@ impl ListArgs {
                 Sort::Created => SortKey::Created,
                 Sort::Agent => SortKey::Agent,
                 Sort::Project => SortKey::Project,
+                Sort::Size => SortKey::Size,
             },
             reverse: self.reverse,
         }
@@ -119,6 +121,7 @@ pub fn print(
     if records.is_empty() {
         writeln!(out,"No sessions match. Run agenthub sync, or adjust your filters.\nUse --include-missing to include cached sessions whose sources disappeared.")?;
     }
+    let installed = launch::installed_agents()?;
     let mut previous = None;
     for record in records {
         let group = group_name(record, args.group_by);
@@ -130,13 +133,19 @@ pub fn print(
         writeln!(out, "{}  {}", ui.heading(&s.key), cell(&s.title))?;
         writeln!(
             out,
-            "  {} · {} records · {}",
+            "  {} · {} records · {} · {}{}",
             ui::time(s.updated_at),
             record.message_count,
+            ui::size(record.size_bytes),
             if record.available {
                 "source available"
             } else {
                 "cached only"
+            },
+            if installed.contains(&s.agent) {
+                ""
+            } else {
+                " · CLI missing"
             }
         )?;
         writeln!(
@@ -218,6 +227,20 @@ fn clip(text: &str, width: usize) -> String {
         out.push(c);
     }
     out
+}
+
+fn input_tail(text: &str, width: usize) -> String {
+    let mut used = 0;
+    let tail: Vec<char> = text
+        .chars()
+        .rev()
+        .take(512)
+        .take_while(|c| {
+            used += c.width().unwrap_or(0);
+            used <= width
+        })
+        .collect();
+    tail.into_iter().rev().collect()
 }
 
 fn padded(text: &str, width: usize) -> String {
@@ -306,16 +329,16 @@ fn rows(records: &[SessionRecord], group: Group) -> Vec<Row> {
 
 fn columns(width: usize) -> (usize, usize, usize) {
     if width >= 90 {
-        (16, 9, 20)
+        (16, 9, 16)
     } else if width >= 65 {
-        (11, 9, 12)
+        (11, 9, 8)
     } else if width >= 45 {
         (5, 8, 8)
     } else {
         (0, 6, 0)
     }
 }
-fn prefix(mark: &str, date: &str, agent: &str, project: &str, width: usize) -> String {
+fn prefix(mark: &str, date: &str, agent: &str, project: &str, size: &str, width: usize) -> String {
     let (d, a, p) = columns(width);
     let mut text = format!("{mark} ");
     for (value, len) in [(date, d), (agent, a), (project, p)] {
@@ -324,9 +347,19 @@ fn prefix(mark: &str, date: &str, agent: &str, project: &str, width: usize) -> S
             text.push(' ');
         }
     }
+    if width >= 65 {
+        text.push_str(&padded(size, 9));
+        text.push(' ');
+    }
     text
 }
-fn session_line(record: &SessionRecord, selected: bool, width: usize, ui: &Ui) -> String {
+fn session_line(
+    record: &SessionRecord,
+    selected: bool,
+    cli_available: bool,
+    width: usize,
+    ui: &Ui,
+) -> String {
     let s = &record.session;
     let date = s
         .updated_at
@@ -352,28 +385,61 @@ fn session_line(record: &SessionRecord, selected: bool, width: usize, ui: &Ui) -
         &date,
         s.agent.as_str(),
         &project,
+        &ui::size(record.size_bytes),
         width,
     );
     let used: usize = lead.chars().map(|c| c.width().unwrap_or(0)).sum();
     let remaining = width.saturating_sub(used);
-    let title = if record.available {
-        padded(&s.title, remaining)
+    let tag = if !cli_available {
+        "[CLI missing] "
+    } else if !record.available {
+        "[cached] "
     } else {
-        padded(
-            &format!("[cached] {}", clip(&s.title, remaining.saturating_sub(9))),
-            remaining,
-        )
+        ""
     };
+    let title = padded(
+        &format!(
+            "{tag}{}",
+            clip(&s.title, remaining.saturating_sub(tag.len()))
+        ),
+        remaining,
+    );
     if selected {
         ui.selected(&padded(&format!("{lead}{title}"), width))
     } else {
-        format!("{}{}", ui.dim(&lead), ui.title(&title))
+        let (d, a, p) = columns(width);
+        let mut text = "  ".to_owned();
+        if d > 0 {
+            text.push_str(&ui.dim(&padded(&date, d)));
+            text.push(' ');
+        }
+        text.push_str(&ui.heading(&padded(s.agent.as_str(), a)));
+        text.push(' ');
+        if p > 0 {
+            text.push_str(&padded(&project, p));
+            text.push(' ');
+        }
+        if width >= 65 {
+            text.push_str(&ui.metric(&padded(&ui::size(record.size_bytes), 9)));
+            text.push(' ');
+        }
+        text.push_str(&ui.title(&title));
+        text
     }
 }
 
-enum Handoff {
+enum Modal {
     Target,
     Preview(agenthub_transfer::Plan),
+    Rename {
+        key: String,
+        input: String,
+    },
+    Delete {
+        key: String,
+        input: String,
+        title: String,
+    },
 }
 
 pub fn choose(
@@ -382,8 +448,9 @@ pub fn choose(
     mut args: ListArgs,
     ui: &Ui,
 ) -> Result<Option<ResumeCommand>> {
+    let installed = launch::installed_agents()?;
     let _screen = Screen::enter()?;
-    let mut handoff: Option<Handoff> = None;
+    let mut modal: Option<Modal> = None;
     let mut query = String::new();
     let mut draft: Option<String> = None;
     let mut page = Page::load(store, &args, &query)?;
@@ -460,14 +527,18 @@ pub fn choose(
                 width,
             )),
         )?;
-        let heading = prefix(" ", "UPDATED (UTC)", "AGENT", "PROJECT", width) + "TITLE";
+        let heading = prefix(" ", "UPDATED (UTC)", "AGENT", "PROJECT", "SIZE", width) + "TITLE";
         at(&mut out, 4, &ui.bar(&padded(&heading, width)))?;
         for (i, row) in rows.iter().skip(top).take(visible).enumerate() {
             let text = match row {
                 Row::Group(name) => ui.heading(&padded(&format!("── {name} ──"), width)),
-                Row::Session(index) => {
-                    session_line(&page.records[*index], *index == selected, width, ui)
-                }
+                Row::Session(index) => session_line(
+                    &page.records[*index],
+                    *index == selected,
+                    installed.contains(&page.records[*index].session.agent),
+                    width,
+                    ui,
+                ),
             };
             at(&mut out, 5 + i as u16, &text)?;
         }
@@ -481,19 +552,33 @@ pub fn choose(
                 )),
             )?;
         }
-        if let Some(state) = &handoff {
+        if let Some(state) = &modal {
             for row in 5..height - 4 {
                 at(&mut out, row, &padded("", width))?;
             }
             let details = match state {
-                Handoff::Target => vec![
+                Modal::Rename { key, input } => vec![
+                    format!("RENAME {key}"),
+                    "Persistent AgentHub display title. Native ID/files stay unchanged.".into(),
+                    "Enter: save   Ctrl-U: clear   Esc: cancel".into(),
+                    format!("Title: {}", input_tail(input, width.saturating_sub(8))),
+                ],
+                Modal::Delete { key, input, title } => vec![
+                    format!("PERMANENT DELETE {key}"),
+                    format!("Title: {title}"),
+                    "Deletes the native session and indexed transcript. Cannot undo.".into(),
+                    "Stop this session in its native agent before deleting.".into(),
+                    "Type DELETE and press Enter to confirm. Esc: cancel.".into(),
+                    format!("Confirm: {input}"),
+                ],
+                Modal::Target => vec![
                     "SESSION TRANSFER · new native session".into(),
                     "1 Claude   2 Codex   3 OpenCode   4 Pi".into(),
                     "5 AGY: no verified importer (source-only)".into(),
                     "Copies active-branch user/assistant text; source unchanged.".into(),
                     "Esc/q cancels. No model is called.".into(),
                 ],
-                Handoff::Preview(plan) => vec![
+                Modal::Preview(plan) => vec![
                     format!("TRANSFER {} -> {}", plan.source, plan.target),
                     format!(
                         "Messages: {}  Excluded records/messages: {}",
@@ -516,9 +601,10 @@ pub fn choose(
             .get(selected)
             .map(|r| {
                 format!(
-                    "{} | {} records | {}",
+                    "{} | {} records | {} | {}",
                     r.session.key,
                     r.message_count,
+                    ui::size(r.size_bytes),
                     r.session
                         .project_path
                         .as_deref()
@@ -551,12 +637,16 @@ pub fn choose(
             &mut out,
             height - 2,
             &ui.dim(&padded(
-                "Up/Down j/k select | Enter: resume | / search | t transfer | n/p page | q quit",
+                if width >= 100 {
+                    "j/k select | Enter: resume | / search | t transfer | e rename | d delete | n/p page | q quit"
+                } else if width >= 59 {
+                    "Enter: resume | / find | t xfer | e name | d del | q quit"
+                } else { "Enter: resume  / search  q quit" },
                 width,
             )),
         )?;
-        let prompt = if handoff.is_some() {
-            Some("Transfer: 1-4 choose target / y confirm preview / Esc cancel".into())
+        let prompt = if modal.is_some() {
+            Some("Review action above. Esc: cancel".into())
         } else {
             draft
                 .as_ref()
@@ -566,12 +656,20 @@ pub fn choose(
             &mut out,
             height - 1,
             &if !message.is_empty() {
-                ui.error(&padded(&message, width))
+                if (message.starts_with("Created ")
+                    && !message.contains("but index refresh failed"))
+                    || message.starts_with("Renamed ")
+                    || message.starts_with("Permanently deleted ")
+                {
+                    ui.metric(&padded(&message, width))
+                } else {
+                    ui.error(&padded(&message, width))
+                }
             } else if let Some(prompt) = prompt {
                 ui.title(&padded(&prompt, width))
             } else {
                 ui.dim(&padded(
-                    "0 All  1 Claude  2 Codex  3 OpenCode  4 Pi  5 AGY",
+                    "0-5 agent  g group  s sort  r reverse  n/p page  q quit",
                     width,
                 ))
             },
@@ -583,6 +681,18 @@ pub fn choose(
                 cursor::MoveTo(column.min(width.saturating_sub(1)) as u16, height - 1),
                 cursor::Show
             )?;
+        } else if let Some(Modal::Rename { input, .. }) = &modal {
+            let shown = input_tail(input, width.saturating_sub(8));
+            let column = 7 + shown.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
+            if visible >= 4 {
+                queue!(
+                    out,
+                    cursor::MoveTo(column.min(width.saturating_sub(1)) as u16, 8),
+                    cursor::Show
+                )?;
+            } else {
+                queue!(out, cursor::Hide)?;
+            }
         } else {
             queue!(out, cursor::Hide)?;
         }
@@ -591,6 +701,10 @@ pub fn choose(
 
         let event = event::read()?;
         if let Event::Paste(text) = &event {
+            if let Some(Modal::Rename { input, .. } | Modal::Delete { input, .. }) = &mut modal {
+                input.push_str(&cell(text));
+                *input = input.chars().take(512).collect();
+            }
             if let Some(input) = &mut draft {
                 input.push_str(&cell(text));
                 *input = input.chars().take(2048).collect();
@@ -610,12 +724,107 @@ pub fn choose(
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Ok(None);
         }
-        if let Some(state) = handoff.take() {
+        if let Some(state) = modal.take() {
+            let modifiers = key.modifiers;
+            if (height < 16 || width < 59)
+                && (key.code == KeyCode::Enter
+                    || matches!((&state, key.code), (Modal::Preview(_), KeyCode::Char('y'))))
+            {
+                modal = Some(state);
+                message =
+                    "Resize terminal to at least 60x16 to review and confirm this action.".into();
+                continue;
+            }
             match (state, key.code) {
-                (_, KeyCode::Esc | KeyCode::Char('q')) => {
+                (_, KeyCode::Esc) | (Modal::Target | Modal::Preview(_), KeyCode::Char('q')) => {
                     message.clear();
                 }
-                (Handoff::Target, KeyCode::Char(c @ '1'..='5')) => {
+                (Modal::Rename { key, mut input }, code) => match code {
+                    KeyCode::Enter => match store.rename(&key, Some(&input)) {
+                        Ok(()) => {
+                            page = Page::load(store, &args, &query)?;
+                            selected = selected.min(page.records.len().saturating_sub(1));
+                            message = format!("Renamed {key}");
+                        }
+                        Err(e) => {
+                            message = format!("Cannot rename: {e:#}");
+                            modal = Some(Modal::Rename { key, input });
+                        }
+                    },
+                    KeyCode::Backspace => {
+                        input.pop();
+                        modal = Some(Modal::Rename { key, input });
+                    }
+                    KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        input.clear();
+                        modal = Some(Modal::Rename { key, input });
+                    }
+                    _ => {
+                        if let KeyCode::Char(c) = code {
+                            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                && input.chars().count() < 512
+                            {
+                                input.push(c);
+                            }
+                        }
+                        modal = Some(Modal::Rename { key, input });
+                    }
+                },
+                (
+                    Modal::Delete {
+                        key,
+                        mut input,
+                        title,
+                    },
+                    code,
+                ) => {
+                    if code == KeyCode::Enter && input == "DELETE" && height >= 16 && width >= 59 {
+                        let mut progress = io::stdout().lock();
+                        at(
+                            &mut progress,
+                            height - 1,
+                            &ui.title(&padded(
+                                "Deleting native session and indexed transcript...",
+                                width,
+                            )),
+                        )?;
+                        progress.flush()?;
+                        drop(progress);
+                        match management::delete(store, &key) {
+                            Ok(()) => {
+                                page = Page::load(store, &args, &query)?;
+                                if page.records.is_empty() && args.selection.offset > 0 {
+                                    args.selection.offset =
+                                        args.selection.offset.saturating_sub(args.selection.limit);
+                                    page = Page::load(store, &args, &query)?;
+                                }
+                                selected = selected.min(page.records.len().saturating_sub(1));
+                                top = 0;
+                                message = format!("Permanently deleted {key}");
+                            }
+                            Err(e) => message = format!("Delete failed: {e:#}"),
+                        }
+                    } else {
+                        match code {
+                            KeyCode::Backspace => {
+                                input.pop();
+                            }
+                            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                input.clear()
+                            }
+                            KeyCode::Char(c)
+                                if !modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                    && input.len() < 16 =>
+                            {
+                                input.push(c)
+                            }
+                            _ => {}
+                        }
+                        modal = Some(Modal::Delete { key, input, title });
+                    }
+                }
+                (Modal::Target, KeyCode::Char(c @ '1'..='5')) => {
                     if let Some(record) = page.records.get(selected) {
                         match transfer::prepare(
                             store,
@@ -626,17 +835,17 @@ pub fn choose(
                             None,
                         ) {
                             Ok(plan) => {
-                                handoff = Some(Handoff::Preview(plan));
+                                modal = Some(Modal::Preview(plan));
                                 message.clear();
                             }
                             Err(e) => {
-                                handoff = Some(Handoff::Target);
+                                modal = Some(Modal::Target);
                                 message = format!("Cannot transfer: {e:#}");
                             }
                         }
                     }
                 }
-                (Handoff::Preview(plan), KeyCode::Char('y')) if height >= 16 && width >= 59 => {
+                (Modal::Preview(plan), KeyCode::Char('y')) if height >= 16 && width >= 59 => {
                     let mut progress = io::stdout().lock();
                     at(
                         &mut progress,
@@ -648,8 +857,20 @@ pub fn choose(
                     match transfer::write(store, settings, &plan) {
                         Ok(receipt) => {
                             args.selection.agent = Some(plan.target);
+                            args.selection.project = None;
+                            args.selection.since = None;
+                            args.selection.until = None;
                             args.selection.offset = 0;
                             query.clear();
+                            let position = store.position(
+                                &receipt.key,
+                                &args.selection.filter()?,
+                                args.order(),
+                            )?;
+                            if let Some(position) = position {
+                                args.selection.offset =
+                                    position / args.selection.limit * args.selection.limit;
+                            }
                             page = Page::load(store, &args, &query)?;
                             selected = page
                                 .records
@@ -657,13 +878,21 @@ pub fn choose(
                                 .position(|r| r.session.key == receipt.key)
                                 .unwrap_or(0);
                             top = 0;
-                            message = format!("Created {}. Source unchanged. Run ah sync if index needs refreshing.",receipt.key);
+                            message = if position.is_some() {
+                                format!(
+                                    "Created {}. Selected in list; filters cleared. {}",
+                                    receipt.key,
+                                    receipt.warnings.join(" ")
+                                )
+                            } else {
+                                format!("Created {}, but index refresh failed. Run ah sync --include-unavailable; do not repeat transfer. {}", receipt.key, receipt.warnings.join(" "))
+                            };
                         }
                         Err(e) => message = format!("Transfer failed: {e:#}"),
                     }
                 }
                 (state, _) => {
-                    handoff = Some(state);
+                    modal = Some(state);
                     if height < 16 || width < 59 {
                         message =
                             "Resize terminal to at least 60x16 to review and confirm transfer."
@@ -744,8 +973,32 @@ pub fn choose(
                 draft = Some(query.clone());
                 message.clear();
             }
+            KeyCode::Char('e') => {
+                if let Some(record) = page.records.get(selected) {
+                    modal = Some(Modal::Rename {
+                        key: record.session.key.clone(),
+                        input: record.session.title.chars().take(512).collect(),
+                    });
+                    message.clear();
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(record) = page.records.get(selected) {
+                    match management::check_delete(store, &record.session.key) {
+                        Ok(()) => {
+                            modal = Some(Modal::Delete {
+                                key: record.session.key.clone(),
+                                input: String::new(),
+                                title: record.session.title.clone(),
+                            });
+                            message.clear();
+                        }
+                        Err(e) => message = format!("Cannot delete: {e:#}"),
+                    }
+                }
+            }
             KeyCode::Char('t') if !page.records.is_empty() => {
-                handoff = Some(Handoff::Target);
+                modal = Some(Modal::Target);
                 message.clear();
             }
             KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
@@ -760,7 +1013,10 @@ pub fn choose(
             }
             KeyCode::Enter => {
                 if let Some(record) = page.records.get(selected) {
-                    match plan_for(store, record) {
+                    match plan_for(store, record, None).and_then(|plan| {
+                        launch::validate_ready(&plan)?;
+                        Ok(plan)
+                    }) {
                         Ok(plan) => return Ok(Some(plan)),
                         Err(e) => message = format!("Cannot resume: {e:#}"),
                     }
@@ -799,7 +1055,8 @@ pub fn choose(
                     Sort::Time => Sort::Created,
                     Sort::Created => Sort::Agent,
                     Sort::Agent => Sort::Project,
-                    Sort::Project => Sort::Time,
+                    Sort::Project => Sort::Size,
+                    Sort::Size => Sort::Time,
                 };
                 args.selection.offset = 0;
                 reload = true;

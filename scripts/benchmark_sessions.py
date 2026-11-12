@@ -33,10 +33,11 @@ with tempfile.TemporaryDirectory(prefix='ah-review-bench-') as tmp:
     time.sleep(.002)
    elapsed=(time.perf_counter()-start)*1000
    if p.returncode:err.seek(0);raise RuntimeError(err.read().decode())
-   row={'command':label,'ms':round(elapsed,2),'peak_rss_mib':round(rss/1024,2) if rss else None};results.append(row)
- run('initial sync: 1001 sessions / 120000 messages','sync','--agent','pi','--json')
- run('unchanged sync','sync','--agent','pi','--json')
+   row={'command':label,'ms':round(elapsed,2),'peak_rss_mib':round(rss/1024,2) if rss >= 1024 else None};results.append(row)
+ run('initial sync: 1001 sessions / 120000 messages','sync','--include-unavailable','--agent','pi','--json')
+ run('unchanged sync','sync','--include-unavailable','--agent','pi','--json')
  run('list 50','list','--json')
+ run('list largest 50','list','--sort','size','--group-by','none','--json')
  run('large branch transfer preview all 20000 messages','transfer','pi:large','--to','codex','--dry-run','--json')
  run('large branch transfer preview last 10','transfer','pi:large','--to','codex','--last','10','--dry-run','--json')
  run('write new Codex file last 1000','transfer','pi:large','--to','codex','--last','1000','--json')
@@ -54,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='ah-review-bench-') as tmp:
     if stage==1 and b'Ctrl-U clear' in data:
      data.clear();start=time.perf_counter();os.write(master,query.encode());stage=2
     if stage==2 and ('Search: /'+query).encode() in data:
-     elapsed=(time.perf_counter()-start)*1000;os.write(master,b'\x1bq');stage=3
+     elapsed=(time.perf_counter()-start)*1000;os.write(master,b'\x03');stage=3
     if p.poll() is not None:break
    if elapsed is None:raise RuntimeError('PTY search timeout')
    results.append({'command':'interactive filter '+query,'ms':round(elapsed,2)})
@@ -62,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='ah-review-bench-') as tmp:
    if p.poll() is None:os.killpg(p.pid,signal.SIGKILL)
    p.wait();os.close(master);os.close(slave)
  for q in ['renderer','unique-final-marker','渲染']:search(q)
- report={'sessions':1001,'messages':120000,'source_bytes':sum(p.stat().st_size for p in src.glob('*.jsonl')),'index_bytes':sum(p.stat().st_size for p in root.glob('index.db*')),'results':results,'notes':'Single-run local synthetic workload, warm caches; /proc peak RSS sampled every 2 ms; includes native-file transfer but no model calls.'}
+ report={'sessions':1001,'messages':120000,'source_bytes':sum(p.stat().st_size for p in src.glob('*.jsonl')),'index_bytes':sum(p.stat().st_size for p in root.glob('index.db*')),'results':results,'notes':'Single-run local synthetic workload, warm caches; /proc RSS sampled after exec every 2 ms (very short commands may have no meaningful sample); includes native-file transfer but no model calls.'}
 
  if args.output:args.output.write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n')
  print(json.dumps(report,indent=2,ensure_ascii=False))

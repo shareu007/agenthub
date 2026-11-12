@@ -1,7 +1,7 @@
 use crate::{content, discover_files, sqlite::{self, has_column, table_exists, Snapshot}, string};
 use agenthub_core::{timestamp, Adapter, Agent, Discovery, Message, Session, SessionSink, Source};
 use anyhow::{bail, Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{fs, path::{Path, PathBuf}};
 
@@ -169,4 +169,18 @@ fn json_files(path: &Path) -> Result<Vec<PathBuf>> {
     }
     paths.sort();
     Ok(paths)
+}
+
+/// Read-only native deletion preflight/verification for the verified v1 store.
+/// Reuse the WAL-aware private snapshot so previews never create source SHM files.
+pub fn deletion_status(path: &Path, id: &str) -> Result<(bool, i64)> {
+    if !path.try_exists()? { return Ok((false, 0)); }
+    let snapshot = Snapshot::open(path)?;
+    let c = &snapshot.conn;
+    if !table_exists(c, "session")? || table_exists(c, "session_v2")? {
+        bail!("native deletion requires a verified OpenCode v1 store; index retained");
+    }
+    let exists = c.query_row("SELECT 1 FROM session WHERE id=?1", [id], |_| Ok(())).optional()?.is_some();
+    let children = c.query_row("SELECT count(*) FROM session WHERE parent_id=?1", [id], |r| r.get(0))?;
+    Ok((exists, children))
 }

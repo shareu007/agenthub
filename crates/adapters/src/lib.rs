@@ -7,7 +7,7 @@ mod sqlite;
 
 pub use agy::{AgyAdapter, agy_assistant_reply};
 pub use jsonl::JsonlAdapter;
-pub use opencode::OpenCodeAdapter;
+pub use opencode::{OpenCodeAdapter, deletion_status as opencode_deletion_status};
 
 use agenthub_core::{Adapter, Agent, Discovery, Source};
 use anyhow::{Context, Result};

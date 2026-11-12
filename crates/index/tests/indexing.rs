@@ -182,3 +182,68 @@ fn global_ordering_grouping_and_null_times_have_stable_pages() {
     assert!(store.list_matching(&Filter::recent(),ListOrder::default(),Some("' OR 1=1; --")).unwrap().is_empty());
     assert_eq!(store.session_counts(&Filter::recent(),Some("")).unwrap(),counts);
 }
+
+#[test]
+fn size_sort_position_and_display_title_survive_refresh_and_purge() {
+    use agenthub_index::{ListOrder, SortKey};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("pi");
+    let path = root.join("a.jsonl");
+    transcript(&path, "small");
+    let a = adapter(Agent::Pi, root.clone());
+    let db = dir.path().join("index.db");
+    let mut store = Store::open(&db).unwrap();
+    store.sync(a.as_ref(), false).unwrap();
+    let small = store.find("session1").unwrap().size_bytes;
+    let mut expected = 0;
+    store.visit_messages("pi:session1", 0, None, |m| { expected += serde_json::to_vec(&m.raw)?.len() as i64; Ok(()) }).unwrap();
+    assert_eq!(small, expected);
+    let large = root.join("b.jsonl");
+    transcript(&large, &"界".repeat(500));
+    fs::write(&large, fs::read_to_string(&large).unwrap().replace("session1", "large")).unwrap();
+    store.sync(a.as_ref(), false).unwrap();
+    let order = ListOrder { sort: SortKey::Size, ..Default::default() };
+    let rows = store.list_ordered(&Filter::recent(), order).unwrap();
+    assert_eq!(rows[0].session.key, "pi:large");
+    assert!(rows[0].size_bytes > small);
+    assert_eq!(store.position("pi:session1", &Filter::recent(), order).unwrap(), Some(1));
+    assert_eq!(store.position("pi:session1", &Filter::recent(), ListOrder {reverse: true, ..order}).unwrap(), Some(0));
+    assert_eq!(store.position("pi:absent", &Filter::recent(), order).unwrap(), None);
+    let before = fs::read(&path).unwrap();
+    store.rename("pi:session1", Some("自定义名字 unique-renamed")).unwrap();
+    assert!(store.rename("pi:session1", Some("bad\ntitle")).is_err());
+    assert!(store.rename("pi:session1", Some(" ")).is_err());
+    assert_eq!(store.search("unique-renamed", &Filter::recent()).unwrap().len(), 1);
+    store.sync(a.as_ref(), true).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(store.find("session1").unwrap().session.title, "自定义名字 unique-renamed");
+    drop(store);
+    let mut store = Store::open(&db).unwrap();
+    assert_eq!(store.find("session1").unwrap().session.title, "自定义名字 unique-renamed");
+    store.rename("pi:session1", None).unwrap();
+    assert_eq!(store.find("session1").unwrap().session.title, "small");
+    assert!(store.search("unique-renamed", &Filter::recent()).unwrap().is_empty());
+    store.purge("pi:session1").unwrap();
+    assert!(store.find("session1").is_err());
+    assert!(store.search("small", &Filter::recent()).unwrap().is_empty());
+    assert!(store.find("large").is_ok());
+}
+
+#[test]
+fn schema_one_migrates_cached_bytes_without_source_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("index.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let old_schema = include_str!("../src/schema.sql").replace(
+        ",\n    size_bytes INTEGER NOT NULL DEFAULT 0,\n    display_title TEXT", "");
+    conn.execute_batch(&old_schema).unwrap();
+    conn.execute_batch("PRAGMA application_id=1095259458; PRAGMA user_version=1;
+        INSERT INTO sources VALUES('s','pi','/absent','/absent/a.jsonl','x',2,0,0);
+        INSERT INTO sessions VALUES('pi:a','a','pi','s','old',NULL,NULL,NULL,'/absent/a.jsonl',NULL,'[]',0,1);
+        INSERT INTO messages VALUES('pi:a',0,NULL,NULL,'user','message',NULL,'界','{\"text\":\"界\"}');").unwrap();
+    drop(conn);
+    let store = Store::open(&db).unwrap();
+    assert_eq!(store.find("pi:a").unwrap().size_bytes, "{\"text\":\"界\"}".len() as i64);
+    drop(store);
+    assert_eq!(Store::open(&db).unwrap().find("pi:a").unwrap().session.title, "old");
+}

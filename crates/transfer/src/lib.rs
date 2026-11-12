@@ -458,7 +458,7 @@ impl Plan {
             .target_root
             .parent()
             .context("OpenCode data root has no parent")?;
-        let version = bounded_command(
+        let version = run_native_command(
             Command::new("opencode")
                 .arg("--version")
                 .env("XDG_DATA_HOME", data_home)
@@ -512,7 +512,7 @@ impl Plan {
             write!(output, "]}}")?;
             output.flush()?;
         }
-        let output = bounded_command(
+        let output = run_native_command(
             Command::new("opencode")
                 .arg("import")
                 .arg(file.path())
@@ -563,7 +563,8 @@ fn private_directory(path: &Path) -> Result<()> {
     builder.create(path)?;
     Ok(())
 }
-fn bounded_command(command: &mut Command) -> Result<String> {
+/// Run a native metadata command with bounded runtime/output and no stdin.
+pub fn run_native_command(command: &mut Command) -> Result<String> {
     bounded_command_with_limits(command, std::time::Duration::from_secs(30), 4 * 1024 * 1024)
 }
 fn bounded_command_with_limits(
@@ -584,7 +585,7 @@ fn bounded_command_with_limits(
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log.try_clone()?))
         .spawn()
-        .context("start OpenCode import")?;
+        .context("start native command")?;
     let mut child = NativeProcess {
         child,
         complete: false,
@@ -592,7 +593,7 @@ fn bounded_command_with_limits(
     let start = Instant::now();
     let status = loop {
         if start.elapsed() >= timeout || log.metadata()?.len() > log_limit {
-            bail!("OpenCode import timed out or exceeded log limit; check native sessions before retrying");
+            bail!("native command timed out or exceeded log limit; check native sessions before retrying");
         }
         if let Some(status) = child.child.try_wait()? {
             if status.success() {
@@ -604,7 +605,7 @@ fn bounded_command_with_limits(
     };
     if !status.success() {
         bail!(
-            "OpenCode import failed; source is unchanged; inspect native sessions before retrying"
+            "native command failed; inspect native sessions before retrying"
         );
     }
     use std::io::{Read, Seek};

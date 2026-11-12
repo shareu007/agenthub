@@ -16,7 +16,7 @@ class SchemaTests(unittest.TestCase):
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript((ROOT / "crates/index/src/schema.sql").read_text())
         self.db.execute("INSERT INTO sources VALUES('src','pi','/source','/source/p.jsonl','f',1,1,0)")
-        self.db.execute("""INSERT INTO sessions VALUES(
+        self.db.execute("""INSERT INTO sessions(key,native_id,agent,source_id,title,project_path,created_at,updated_at,source_path,parent_id,warnings,available,message_count) VALUES(
             'pi:one','one','pi','src','Title','/project',100,200,'/source/p.jsonl',NULL,'[]',1,0)""")
         self.db.commit()
 

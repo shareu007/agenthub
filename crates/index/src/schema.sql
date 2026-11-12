@@ -22,7 +22,9 @@ CREATE TABLE sessions (
     parent_id TEXT,
     warnings TEXT NOT NULL,
     available INTEGER NOT NULL DEFAULT 1,
-    message_count INTEGER NOT NULL DEFAULT 0
+    message_count INTEGER NOT NULL DEFAULT 0,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    display_title TEXT
 );
 CREATE INDEX sessions_source ON sessions(source_id);
 CREATE INDEX sessions_updated ON sessions(updated_at DESC,key);

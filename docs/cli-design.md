@@ -35,7 +35,7 @@ ah list --no-interactive                 # 只打印，不打开会话
 ah list --group-by project --sort time --json
 ```
 
-`--sort` 支持 `time`（更新时间，别名 updated）、`created`（创建时间）、`agent`、`project`。时间默认最新在前，Agent/项目默认 A-Z；`--reverse` 反转组内排序，分类本身仍 A-Z，未知时间/项目排末尾。分类和排序在数据库中针对所有匹配会话执行后，再应用 `--limit` / `--offset`，并非只重排当前页。JSON 保持扁平数组与原有字段，顺序遵循相同规则。
+`--sort` 支持 `time`（更新时间，别名 updated）、`created`（创建时间）、`agent`、`project`、`size`。大小默认从大到小，时间默认最新在前，Agent/项目默认 A-Z；`--reverse` 反转组内排序，分类本身仍 A-Z，未知时间/项目排末尾。分类和排序在数据库中针对所有匹配会话执行后，再应用 `--limit` / `--offset`，并非只重排当前页。JSON 保持扁平数组，增加 `size_bytes` 字段，顺序遵循相同规则。
 
 当 stdin 和 stdout 都是终端且 TERM 不是 dumb 时，`list` 自动进入选择器：
 
@@ -48,6 +48,8 @@ ah list --group-by project --sort time --json
 | 0–5 / Tab / 左右键 | All、Claude、Codex、OpenCode、Pi、AGY 分类入口 |
 | / | 搜索整个索引的正文、标题、项目和 ID，实时过滤，不限当前页 |
 | 搜索中 Backspace / Ctrl-U | 删除字符 / 清空输入 |
+| e | 修改持久显示标题（Enter 保存，Ctrl-U 清空，Esc 取消）；不改原生文件和 ID |
+| d | 永久删除选中的原生会话；展示身份后输入 `DELETE` 并回车确认，Esc 取消 |
 | t | 转移到新原生会话：选择目标、预览、y 确认，详见 session-transfer.md |
 | g | 循环按 Agent / 项目分类 / 不分类 |
 | s | 循环更新时间 / 创建时间 / Agent / 项目排序 |
@@ -86,3 +88,24 @@ ah list --group-by project --sort time --json
 - 安全：人类输出过滤 transcript 中的终端控制字符；不执行正文中的 ANSI/OSC 控制序列。
 - 完整性：静态/JSON 输出不截断身份、路径、标题或正文，不启动外部 pager；交互预览按终端宽度裁剪和分屏。
 - 恢复预览：保持 stdout 为可复制的 shell 命令；显式 `--exec` 或选择器中按 Enter 时交接进程。
+
+## 可用客户端、大小与会话管理
+
+默认 `sync` 只读取当前 PATH 中有可执行文件的 Agent。检测不启动 Agent、不验证登录，不把 shell 函数或别名当成安装；缺失客户端会跳过并保留旧索引。显式 `--agent` 指定未安装的客户端返回错误。离线历史导入可用 `sync --include-unavailable`。旧列表记录仍可查阅，缺失 CLI 显示 `[CLI missing]`，按 Enter 会在列表内解释原因。
+
+恢复会先校验工作目录、解析可执行文件，再切换到会话项目；相对 PATH 在原工作目录解析。项目已移动时可用 `ah resume <id> --cwd /new/project --exec`。
+
+`SIZE` / JSON `size_bytes` 统计索引内该会话原生记录的紧凑 JSON UTF-8 字节数（含记录头/事件，AGY 的二进制字段按保留的 Base64 JSON 计算）。这用于比较会话内容规模，并非单条会话的物理磁盘占用；共享数据库整文件大小不应重复计给每个会话。数据在同步时累计，列表不遍历文件或正文。`ah list --sort size --group-by none` 可查看全局大小排序；`s` 轮换到 Size，`r` 反转。
+
+transfer 成功后直接刷新目标索引，切换目标 Agent，清除搜索/项目/时间筛选。保留分类、排序和方向，计算新 ID 的完整排序位置，自动翻到所在数据页并选中它；无需手动 sync。原生创建成功但索引刷新失败时显示单独提示，避免重复创建。
+
+```sh
+ah rename pi:SESSION_ID "新的标题"  # 持久显示名，同步/重启后保留
+ah rename pi:SESSION_ID --reset    # 恢复原生标题
+ah delete pi:SESSION_ID            # 预览；不删除
+ah delete pi:SESSION_ID --yes      # 不可撤销：删除原生会话及派生索引
+```
+
+永久删除支持 Claude/Codex/Pi 的单会话 JSONL 文件，以及已验证的 OpenCode v1 SQLite 存储。删除前重新核对会话身份和文件变化；OpenCode 通过官方 `session delete`，然后核对原生记录已消失，拒绝会递归删除子会话的操作。删除成功后清除派生 messages/documents/FTS，不建立回收站。AGY 暂无已验证的删除 API，提示从 `agy` 的 `/resume` 删除；OpenCode 旧 JSON 或未验证 v2 存储也明确拒绝，不会仅隐藏列表而假装已完成原生删除。
+
+配色使用终端默认前景/背景的加粗反色作为选中行，不再固定蓝/青背景或黑字。标题加粗，Agent/组标题青色，大小绿色，时间和快捷键灰色；选中行统一使用终端默认反色。`--color never` / `NO_COLOR` 继续可用，纯文本保留 `>` 选择标记。

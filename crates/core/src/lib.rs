@@ -77,7 +77,7 @@ impl Session {
 
     pub fn suggest_title(&mut self, text: &str) {
         if self.title.is_empty() {
-            self.title = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect();
+            self.title = text.split_whitespace().flat_map(|word| std::iter::once(' ').chain(word.chars())).skip(1).take(120).collect();
         }
     }
 }

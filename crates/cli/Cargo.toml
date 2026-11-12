@@ -28,5 +28,6 @@ crossterm = "0.28.1"
 unicode-width = "0.2"
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
 

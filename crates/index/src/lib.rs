@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, HashSet}, fs, path::{Path, PathBuf}, time::Duration};
 
 const APP_ID: i64 = 0x41485542;
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const PARSER_VERSION: i64 = 2;
-const SESSION_COLUMNS: &str = "s.key,s.native_id,s.agent,s.title,s.project_path,s.created_at,s.updated_at,s.source_path,s.parent_id,s.warnings,s.available,s.message_count";
+const SESSION_COLUMNS: &str = "s.key,s.native_id,s.agent,coalesce(s.display_title,s.title),s.project_path,s.created_at,s.updated_at,s.source_path,s.parent_id,s.warnings,s.available,s.message_count,s.size_bytes";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -16,10 +16,12 @@ pub struct SessionRecord {
     pub session: Session,
     pub available: bool,
     pub message_count: i64,
+    /// UTF-8 bytes of native records in the indexed transcript (not a shared database file).
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub enum SortKey { #[default] Updated, Created, Agent, Project }
+pub enum SortKey { #[default] Updated, Created, Agent, Project, Size }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum GroupBy { #[default] None, Agent, Project }
@@ -115,6 +117,14 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
+        if version == 1 {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE sessions ADD COLUMN display_title TEXT;
+                UPDATE sessions SET size_bytes=coalesce((SELECT sum(length(CAST(raw AS BLOB))) FROM messages WHERE session_key=sessions.key),0);")?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         Ok(Self { conn })
     }
@@ -168,7 +178,7 @@ impl Store {
             params![id,source.agent.as_str(),root,path_text(&source.path)?,fingerprint,PARSER_VERSION,chrono::Utc::now().timestamp_millis()])?;
         tx.execute("UPDATE sessions SET available=0 WHERE source_id=?1", [id])?;
         {
-            let mut writer = Writer { tx: &tx, source_id: id, current: None, count: 0 };
+            let mut writer = Writer { tx: &tx, source_id: id, current: None, count: 0, size: 0 };
             adapter.read(source, &mut writer)?;
             if writer.current.is_some() { bail!("adapter did not finish the current session"); }
         }
@@ -189,23 +199,46 @@ impl Store {
 
     /// Literal search over identity and indexed documents, before pagination.
     pub fn list_matching(&self, filter: &Filter, order: ListOrder, query: Option<&str>) -> Result<Vec<SessionRecord>> {
-        let group = match order.group {
-            GroupBy::None => "",
-            GroupBy::Agent => "s.agent ASC,",
-            GroupBy::Project => "s.project_path IS NULL,s.project_path ASC,",
-        };
-        let (column, descending) = match order.sort {
-            SortKey::Updated => ("s.updated_at", true),
-            SortKey::Created => ("s.created_at", true),
-            SortKey::Agent => ("s.agent", false),
-            SortKey::Project => ("s.project_path", false),
-        };
-        let direction = if descending != order.reverse { "DESC" } else { "ASC" };
+        let ordering = ordering(order);
         let (predicate, args) = matching_args(filter, query);
-        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {predicate} ORDER BY {group}{column} {direction} NULLS LAST,s.updated_at DESC,s.key ASC LIMIT ?6 OFFSET ?7");
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE {predicate} ORDER BY {ordering} LIMIT ?6 OFFSET ?7");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(args), session_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Zero-based position in the complete sorted result. Used to focus newly
+    /// created sessions even with grouping, reverse order, or small pages.
+    pub fn position(&self, key: &str, filter: &Filter, order: ListOrder) -> Result<Option<u32>> {
+        let sql = format!("SELECT position FROM (SELECT s.key,row_number() OVER (ORDER BY {})-1 AS position FROM sessions s WHERE {WHERE_FILTER}) WHERE key=?6", ordering(order));
+        let mut args = filter.args().to_vec();
+        args.truncate(5);
+        args.push(key.to_owned().into());
+        Ok(self.conn.query_row(&sql, rusqlite::params_from_iter(args), |r| r.get(0)).optional()?)
+    }
+
+    /// User-owned display metadata survives all native index refreshes.
+    pub fn rename(&mut self, key: &str, title: Option<&str>) -> Result<()> {
+        if title.is_some_and(|s| s.trim().is_empty() || s.chars().count() > 512 || s.chars().any(char::is_control)) {
+            bail!("title must contain 1-512 characters and no control characters");
+        }
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute("UPDATE sessions SET display_title=?2 WHERE key=?1", params![key,title])? == 0 { bail!("session not found"); }
+        tx.execute("UPDATE documents SET body=(SELECT coalesce(display_title,title)||char(10)||coalesce(project_path,'') FROM sessions WHERE key=?1) WHERE session_key=?1 AND ordinal=-1", [key])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Purge the derived transcript only after native deletion succeeds.
+    pub fn purge(&mut self, key: &str) -> Result<()> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let source: Option<String> = tx.query_row("SELECT source_id FROM sessions WHERE key=?1", [key], |r| r.get(0)).optional()?;
+        tx.execute("DELETE FROM documents WHERE session_key=?1", [key])?;
+        tx.execute("DELETE FROM messages WHERE session_key=?1", [key])?;
+        tx.execute("DELETE FROM sessions WHERE key=?1", [key])?;
+        if let Some(source) = source { tx.execute("DELETE FROM sources WHERE id=?1 AND NOT EXISTS (SELECT 1 FROM sessions WHERE source_id=?1)", [source])?; }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Counts all matches, ignoring page size/offset. Caller chooses agent scope.
@@ -246,7 +279,7 @@ impl Store {
         } else {
             ("documents d JOIN sessions s ON s.key=d.session_key", "instr(lower(d.body),lower(?8))>0", "substr(d.body,max(1,instr(lower(d.body),lower(?8))-60),180)", "s.updated_at DESC,d.id")
         };
-        let sql = format!("SELECT s.key,s.agent,s.title,d.ordinal,{excerpt} FROM {from} WHERE {WHERE_FILTER} AND {condition} ORDER BY {order} LIMIT ?6 OFFSET ?7");
+        let sql = format!("SELECT s.key,s.agent,coalesce(s.display_title,s.title),d.ordinal,{excerpt} FROM {from} WHERE {WHERE_FILTER} AND {condition} ORDER BY {order} LIMIT ?6 OFFSET ?7");
         let mut args = filter.args().to_vec();
         args.push(rusqlite::types::Value::Text(if long { format!("\"{}\"",query.replace('"',"\"\"")) } else { query.into() }));
         let mut stmt = self.conn.prepare(&sql)?;
@@ -261,6 +294,20 @@ impl Store {
     pub fn source_root(&self, key: &str) -> Result<PathBuf> {
         Ok(PathBuf::from(self.conn.query_row("SELECT root FROM sources JOIN sessions ON sources.id=sessions.source_id WHERE sessions.key=?1", [key], |r| r.get::<_,String>(0))?))
     }
+}
+
+fn ordering(order: ListOrder) -> String {
+    let group = match order.group {
+        GroupBy::None => "", GroupBy::Agent => "s.agent ASC,",
+        GroupBy::Project => "s.project_path IS NULL,s.project_path ASC,",
+    };
+    let (column, descending) = match order.sort {
+        SortKey::Updated => ("s.updated_at", true), SortKey::Created => ("s.created_at", true),
+        SortKey::Agent => ("s.agent", false), SortKey::Project => ("s.project_path", false),
+        SortKey::Size => ("s.size_bytes", true),
+    };
+    let direction = if descending != order.reverse { "DESC" } else { "ASC" };
+    format!("{group}{column} {direction} NULLS LAST,s.updated_at DESC,s.key ASC")
 }
 
 fn matching_args(filter: &Filter, query: Option<&str>) -> (String, Vec<rusqlite::types::Value>) {
@@ -287,14 +334,14 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
         key:row.get(0)?,native_id:row.get(1)?,agent:agent.parse().map_err(|e: anyhow::Error| convert(e.into()))?,title:row.get(3)?,
         project_path:row.get::<_,Option<String>>(4)?.map(PathBuf::from),created_at:row.get(5)?,updated_at:row.get(6)?,source_path:PathBuf::from(row.get::<_,String>(7)?),parent_id:row.get(8)?,
         warnings:serde_json::from_str(&warnings).map_err(|e| convert(Box::new(e)))?,
-    },available:row.get(10)?,message_count:row.get(11)? })
+    },available:row.get(10)?,message_count:row.get(11)?,size_bytes:row.get(12)? })
 }
 
-struct Writer<'a, 'conn> { tx: &'a Transaction<'conn>, source_id: &'a str, current: Option<String>, count: i64 }
+struct Writer<'a, 'conn> { tx: &'a Transaction<'conn>, source_id: &'a str, current: Option<String>, count: i64, size: i64 }
 impl Writer<'_, '_> {
     fn put_session(&self, s: &Session) -> Result<()> {
-        self.tx.execute("INSERT INTO sessions(key,native_id,agent,source_id,title,project_path,created_at,updated_at,source_path,parent_id,warnings,available,message_count) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,?12) ON CONFLICT(key) DO UPDATE SET source_id=excluded.source_id,title=excluded.title,project_path=excluded.project_path,created_at=excluded.created_at,updated_at=excluded.updated_at,source_path=excluded.source_path,parent_id=excluded.parent_id,warnings=excluded.warnings,available=1,message_count=excluded.message_count",
-            params![s.key,s.native_id,s.agent.as_str(),self.source_id,s.title,s.project_path.as_deref().map(path_text).transpose()?,s.created_at,s.updated_at,path_text(&s.source_path)?,s.parent_id,serde_json::to_string(&s.warnings)?,self.count])?;
+        self.tx.execute("INSERT INTO sessions(key,native_id,agent,source_id,title,project_path,created_at,updated_at,source_path,parent_id,warnings,available,message_count,size_bytes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,?12,?13) ON CONFLICT(key) DO UPDATE SET source_id=excluded.source_id,title=excluded.title,project_path=excluded.project_path,created_at=excluded.created_at,updated_at=excluded.updated_at,source_path=excluded.source_path,parent_id=excluded.parent_id,warnings=excluded.warnings,available=1,message_count=excluded.message_count,size_bytes=excluded.size_bytes",
+            params![s.key,s.native_id,s.agent.as_str(),self.source_id,s.title,s.project_path.as_deref().map(path_text).transpose()?,s.created_at,s.updated_at,path_text(&s.source_path)?,s.parent_id,serde_json::to_string(&s.warnings)?,self.count,self.size])?;
         Ok(())
     }
 }
@@ -302,6 +349,7 @@ impl SessionSink for Writer<'_, '_> {
     fn begin(&mut self, session: &Session) -> Result<()> {
         if self.current.is_some() { bail!("nested session begin"); }
         self.count = 0;
+        self.size = 0;
         self.put_session(session)?;
         self.tx.execute("DELETE FROM documents WHERE session_key=?1", [&session.key])?;
         self.tx.execute("DELETE FROM messages WHERE session_key=?1", [&session.key])?;
@@ -310,7 +358,9 @@ impl SessionSink for Writer<'_, '_> {
     }
     fn message(&mut self, m: &Message) -> Result<()> {
         let key = self.current.as_deref().context("message outside session")?;
-        self.tx.prepare_cached("INSERT INTO messages(session_key,ordinal,native_id,parent_id,role,kind,timestamp,body,raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?.execute(params![key,m.ordinal,m.native_id,m.parent_id,m.role,m.kind,m.timestamp,m.text,serde_json::to_string(&m.raw)?])?;
+        let raw = serde_json::to_string(&m.raw)?;
+        self.size += i64::try_from(raw.len())?;
+        self.tx.prepare_cached("INSERT INTO messages(session_key,ordinal,native_id,parent_id,role,kind,timestamp,body,raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?.execute(params![key,m.ordinal,m.native_id,m.parent_id,m.role,m.kind,m.timestamp,m.text,raw])?;
         if !m.text.is_empty() && m.role != "event" {
             self.tx.prepare_cached("INSERT INTO documents(session_key,ordinal,body) VALUES(?1,?2,?3)")?.execute(params![key,m.ordinal,m.text])?;
         }
@@ -320,8 +370,7 @@ impl SessionSink for Writer<'_, '_> {
     fn finish(&mut self, session: &Session) -> Result<()> {
         if self.current.as_deref() != Some(session.key.as_str()) { bail!("session finish mismatch"); }
         self.put_session(session)?;
-        let project = session.project_path.as_deref().map(path_text).transpose()?.unwrap_or_default();
-        self.tx.execute("INSERT INTO documents(session_key,ordinal,body) VALUES(?1,-1,?2)",params![session.key,format!("{}\n{}",session.title,project)])?;
+        self.tx.execute("INSERT INTO documents(session_key,ordinal,body) SELECT key,-1,coalesce(display_title,title)||char(10)||coalesce(project_path,'') FROM sessions WHERE key=?1", [&session.key])?;
         self.current = None;
         Ok(())
     }

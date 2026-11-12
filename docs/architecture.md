@@ -26,12 +26,12 @@ Adapter 是 Rust trait，内建适配器静态注册，新增 Agent 只需实现
 
 ## 3. 数据库
 
-数据库由 `application_id=0x41485542` 标记，`user_version=1` 管理迁移。已有的非 AgentHub 数据库会在任何 schema/WAL 设置之前拒绝，避免误把原 Agent 数据库当作索引。所有用户过滤值使用绑定参数。
+数据库由 `application_id=0x41485542` 标记，`user_version=2` 管理迁移。已有的非 AgentHub 数据库会在任何 schema/WAL 设置之前拒绝，避免误把原 Agent 数据库当作索引。所有用户过滤值使用绑定参数。
 
 | 表 | 内容 |
 |---|---|
 | `sources` | 来源 ID、Agent、配置根、文件路径、指纹、解析器版本、可用状态、同步时间 |
-| `sessions` | 统一元数据、来源外键、可用性、记录数、解析警告 |
+| `sessions` | 统一元数据、来源外键、可用性、记录数、原生记录字节数、用户显示标题、解析警告 |
 | `messages` | 流式写入的原始/规范化记录，以 `(session_key,ordinal)` 定位 |
 | `documents` | 每条非镜像记录的文本，加上 `ordinal=-1` 的标题/项目文档 |
 | `documents_fts` | 以 `documents` 为 external content 的 FTS5 trigram 索引 |
@@ -82,4 +82,10 @@ Core 生成结构化 `ResumeCommand {program,args,cwd,env}`；CLI 输出 shell �
 
 2026-11-12 在 Linux / Rust 1.85.0 下运行了 39 项 Rust 单元/集成测试、8 项 SQL 测试、Clippy（warnings denied）和发布构建，均通过。新增 AGY 1.5.6、Pi 1.5.2 与 OpenCode 1.19.5 原生写出夹具；三者均通过真实 `resume --exec` 终端历史加载，Pi 另通过 RPC 身份及消息校验；未调用远端模型续聊。Claude 真实恢复尚未验收；Codex 已新增移交文件的原生 loader 验证，原生写出样本仍未验收。macOS / stable Rust 矩阵本次未执行。详细版本、样本来源、证据和阻塞见 [兼容性验收](compatibility.md)。`scripts/verify_sql.py` 只验证正式 SQL，不能替代 Adapter 或原生恢复测试。
 
-本次新增选择器、全索引搜索与移交的验证及性能/缓存 review 见 [代码 review](review-session-browser.md)。
+本次新增选择器、全索引搜索与移交的验证及性能/缓存 review 见 [代码 review](review-session-browser.md)。会话管理、客户端检测和 schema v2 的后续 review 见 [管理功能 review](review-session-management.md)。
+
+## 显示元数据与显式删除
+
+Schema v2 为 sessions 增加 `size_bytes`、`display_title`。v1 首次打开时在事务内迁移，以已缓存 raw 的 UTF-8 字节数一次性补齐大小，不访问/重读原生来源，不丢弃离线会话。后续同步逐记录序列化一次，同时累计长度，不新增原文副本；大小排序与分页在 SQL 中完成。显示名是用户元数据，不受原生 upsert 覆盖；标题/项目 FTS 文档使用最终显示名，重命名与文档更新同一事务提交。
+
+原生扫描仍只读。CLI management 仅在明确删除确认后移除对应 JSONL 或调用 OpenCode 官方删除命令，验证成功后通过索引事务清理该会话及孤立来源；失败保留索引并解释原因。OpenCode 删除预检和结果检查复用 WAL-aware 私有快照，避免预览在原目录创建 SHM。无定时缓存清理、全库 VACUUM、软删除或后台任务。

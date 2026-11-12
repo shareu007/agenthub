@@ -28,6 +28,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
