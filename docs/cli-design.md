@@ -45,7 +45,7 @@ ah list --group-by project --sort time --json
 | Home / End | 当前数据页第一项/最后一项 |
 | PageUp / PageDown | 翻动屏幕内的显示页 |
 | Enter | 原地恢复选中会话，等同 `resume <id> --exec`；搜索输入中只应用查询 |
-| 0–5 / Tab / 左右键 | All、Claude、Codex、OpenCode、Pi、AGY 分类入口 |
+| 1–6 / Tab / 左右键 | 1 All、2 Claude、3 Codex、4 OpenCode、5 Pi、6 AGY 分类入口；transfer 目标沿用相同 Agent 编号 |
 | / | 搜索整个索引的正文、标题、项目和 ID，实时过滤，不限当前页 |
 | 搜索中 Backspace / Ctrl-U | 删除字符 / 清空输入 |
 | e | 修改持久显示标题（Enter 保存，Ctrl-U 清空，Esc 取消）；不改原生文件和 ID |

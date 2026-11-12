@@ -151,13 +151,14 @@ def main():
                                    (key, 'BODY_ONLY_RENDER_TOKEN_1983 渲染猫 LONG_SEARCH_'+'x'*72+'_END'))
         for binary in binaries:
             base = [binary, '--config', str(config), '--color', 'always']
-            code, output = terminal(base, environment, [(b'Enter: resume', b'4'), (b'agent=pi', b'2'),
-                                                        (b'agent=codex', b'q')])
+            code, output = terminal(base, environment, [(b'Enter: resume', b'5'), (b'agent=pi', b'3'),
+                (b'agent=codex', b'2'), (b'agent=claude', b'4'),
+                (b'agent=opencode', b'6'), (b'agent=agy', b'1'), (b'agent=all', b'q')])
             assert code == 0 and b'Hidden Codex' in output
-            for label in [b'1 Claude:1', b'2 Codex:1', b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']:
+            for label in [b'2 Claude:1', b'3 Codex:1', b'4 OpenCode:1', b'5 Pi:3', b'6 AGY:60']:
                 assert label in output, (label, output)
-            labels = [b'0 All:66', b'1 Claude:1', b'2 Codex:1',
-                      b'3 OpenCode:1', b'4 Pi:3', b'5 AGY:60']
+            labels = [b'1 All:66', b'2 Claude:1', b'3 Codex:1',
+                      b'4 OpenCode:1', b'5 Pi:3', b'6 AGY:60']
             # All tabs fit naturally on one line at 80 columns. At 50 columns,
             # wrapping follows label width, so four tabs fit on the first line.
             for columns, expected_lines in [(110, 1), (80, 1), (50, 2)]:
@@ -172,7 +173,7 @@ def main():
                 if expected_lines == 1:
                     assert b'  '.join(labels) == tabs[0], tabs
                 else:
-                    assert b'3 OpenCode:1' in tabs[0] and b'4 Pi:3' in tabs[1], tabs
+                    assert b'4 OpenCode:1' in tabs[0] and b'5 Pi:3' in tabs[1], tabs
             # Important headings and the selected row receive explicit styles.
             assert b'\x1b[1m' in output and b'\x1b[1;7m' in output
             assert b'\x1b[1;97;44m' not in output and b'\x1b[1;30;46m' not in output
@@ -200,9 +201,9 @@ def main():
             assert code == 0
             # Modal handoff preview/cancel must never create a native file.
             before = set(source.rglob('*.jsonl'))
-            code, _ = terminal(base, environment, [(b'Enter: resume', b'4'),
-                (b'agent=pi', b't'), (b'SESSION TRANSFER', b'4'),
-                (b'confirm transfer', b'\x1b'), (b'0-5 agent', b'q')])
+            code, _ = terminal(base, environment, [(b'Enter: resume', b'5'),
+                (b'agent=pi', b't'), (b'SESSION TRANSFER', b'5'),
+                (b'confirm transfer', b'\x1b'), (b'1-6 agent', b'q')])
             assert code == 0 and set(source.rglob('*.jsonl')) == before
             print(Path(binary).name+': all five tabs, >50-row counts, global body/Unicode search, search cancellation and transfer preview passed')
         unavailable_env = dict(environment, PATH='')
@@ -217,7 +218,7 @@ def main():
         code, output = terminal([binaries[0], '--config', str(config), '--color', 'always',
             'list', '--agent', 'pi', '--limit', '1', '--sort', 'size', '--reverse',
             '--project', str(project), '--until', '2026-02-01'], environment,
-            [(b'Enter: resume', b't'), (b'SESSION TRANSFER', b'2'),
+            [(b'Enter: resume', b't'), (b'SESSION TRANSFER', b'3'),
              (b'confirm transfer', b'y'), (b'Created codex:', b'q')])
         assert code == 0 and b'offset 1' in output and b'SIZE' in output
         assert b'filters cleared' in output
@@ -231,7 +232,7 @@ def main():
             assert code == 0 and b'Custom q title' in output
             # Delete cancellation and incorrect confirmation must preserve source.
             code, _ = terminal(base, environment, [(b'Enter: resume', b'd'),
-                (b'PERMANENT DELETE pi:b', b'WRONG\r'), (b'Confirm: WRONG', b'\x1b'), (b'0-5 agent', b'q')])
+                (b'PERMANENT DELETE pi:b', b'WRONG\r'), (b'Confirm: WRONG', b'\x1b'), (b'1-6 agent', b'q')])
             assert code == 0 and (source/'b.jsonl').exists()
             # Stop before confirming on this shared test session; final destructive
             # PTY check below uses the last native file exactly once.
@@ -244,8 +245,8 @@ def main():
         print('Transfer focuses the correct size-sorted page; persistent rename and confirmed/cancelled native deletion passed')
         original_sources = {p: p.read_bytes() for p in source.glob('*.jsonl')}
         code, output = terminal([binaries[0], '--config', str(config), '--color', 'always'], environment,
-            [(b'Enter: resume', b'4'), (b'agent=pi', b't'),
-             (b'SESSION TRANSFER', b'2'), (b'confirm transfer', b'y'),
+            [(b'Enter: resume', b'5'), (b'agent=pi', b't'),
+             (b'SESSION TRANSFER', b'3'), (b'confirm transfer', b'y'),
              (b'Created codex:', b'q')])
         assert code == 0 and len(list((root/'codex').rglob('*.jsonl'))) == 2
         assert all(p.read_bytes() == content for p, content in original_sources.items())

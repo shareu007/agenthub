@@ -291,7 +291,7 @@ fn agent_bars(page: &Page, selected: Option<Agent>, width: usize, ui: &Ui) -> Ve
     let mut used = 0;
     for i in 0..AGENTS.len() {
         let label = clip(
-            &format!("{} {}:{}", i, LABELS[i], page.total(AGENTS[i])),
+            &format!("{} {}:{}", i + 1, LABELS[i], page.total(AGENTS[i])),
             width,
         );
         let length = label.len(); // Agent labels and decimal counts are ASCII.
@@ -516,7 +516,7 @@ pub fn choose(
             content_top - 2,
             &ui.dim(&padded(
                 &format!(
-                    "Group: {:?} [g]  Sort: {:?}{} [s/r]  agent={} [0-5/Tab/Left/Right]",
+                    "Group: {:?} [g]  Sort: {:?}{} [s/r]  agent={} [1-6/Tab/Left/Right]",
                     args.group_by,
                     args.sort,
                     if args.reverse { " reversed" } else { "" },
@@ -574,8 +574,8 @@ pub fn choose(
                 ],
                 Modal::Target => vec![
                     "SESSION TRANSFER · new native session".into(),
-                    "1 Claude   2 Codex   3 OpenCode   4 Pi".into(),
-                    "5 AGY: no verified importer (source-only)".into(),
+                    "2 Claude   3 Codex   4 OpenCode   5 Pi".into(),
+                    "6 AGY: no verified importer (source-only)".into(),
                     "Copies active-branch user/assistant text; source unchanged.".into(),
                     "Esc/q cancels. No model is called.".into(),
                 ],
@@ -674,7 +674,7 @@ pub fn choose(
                 ui.title(&padded(&prompt, width))
             } else {
                 ui.dim(&padded(
-                    "0-5 agent  g group  s sort  r reverse  n/p page  q quit",
+                    "1-6 agent  g group  s sort  r reverse  n/p page  q quit",
                     width,
                 ))
             },
@@ -829,13 +829,13 @@ pub fn choose(
                         modal = Some(Modal::Delete { key, input, title });
                     }
                 }
-                (Modal::Target, KeyCode::Char(c @ '1'..='5')) => {
+                (Modal::Target, KeyCode::Char(c @ '2'..='6')) => {
                     if let Some(record) = page.records.get(selected) {
                         match transfer::prepare(
                             store,
                             settings,
                             &record.session.key,
-                            AGENTS[(c as u8 - b'0') as usize].expect("target digit"),
+                            AGENTS[(c as u8 - b'1') as usize].expect("target digit"),
                             None,
                             None,
                         ) {
@@ -1027,8 +1027,8 @@ pub fn choose(
                     }
                 }
             }
-            KeyCode::Char(c @ '0'..='5') => {
-                args.selection.agent = AGENTS[(c as u8 - b'0') as usize];
+            KeyCode::Char(c @ '1'..='6') => {
+                args.selection.agent = AGENTS[(c as u8 - b'1') as usize];
                 args.selection.offset = 0;
                 reload = true;
             }
