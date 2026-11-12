@@ -4,3 +4,6 @@
 *.db-wal
 /.agenthub/
 
+/dist/
+__pycache__/
+/.demo-venv/

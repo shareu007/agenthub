@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Verify tag and package version
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib
+          tag = os.environ['RELEASE_TAG']
+          version = re.search(r'^version = "([^"]+)"', pathlib.Path('Cargo.toml').read_text(), re.M)[1]
+          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', tag), 'Invalid release tag'
+          assert tag == 'v' + version, 'Tag must match Cargo.toml version'
+          PY
+          test "$(git describe --tags --exact-match HEAD)" = "$RELEASE_TAG"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install Linux static build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          # Compile bundled C with musl; link Rust's self-contained static PIE with cc.
+          echo 'CC_x86_64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CC_aarch64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=cc' >> "$GITHUB_ENV"
+      - name: Test and build native target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo test --locked --workspace --target "$TARGET"
+          cargo build --locked --release -p agenthub-cli --target "$TARGET"
+          python3 scripts/verify_selector.py --bin-dir "target/$TARGET/release"
+          python3 scripts/verify_installer.py
+          python3 scripts/package_release.py --target "$TARGET" --version "$RELEASE_TAG" --bin-dir "target/$TARGET/release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  draft:
+    name: Assemble draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify complete set and generate checksums
+        run: |
+          python3 - <<'PY'
+          import pathlib, hashlib
+          from scripts.package_release import TARGETS
+          root = pathlib.Path('dist')
+          expected = {f'agenthub-{t}.tar.gz' for t in TARGETS}
+          assert {p.name for p in root.glob('*.tar.gz')} == expected, 'Missing or unexpected release archive'
+          (root/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((root/name).read_bytes()).hexdigest()}  {name}\n' for name in sorted(expected)))
+          PY
+      - name: Create draft with all four platforms
+        run: |
+          flags=(--verify-tag --draft)
+          if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS \
+            "${flags[@]}" --title "AgentHub $RELEASE_TAG" --generate-notes

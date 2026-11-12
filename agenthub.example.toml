@@ -3,7 +3,8 @@
 # database = "~/.local/share/agenthub/index.db"
 
 [sources]
-# Each value is an existing agent store; AgentHub never writes to these paths.
+# Existing agent stores. Discovery/sync only reads them. Explicit transfer or
+# confirmed delete operations create/remove native sessions.
 # claude = "~/.claude/projects"
 # codex = "~/.codex"  # contains sessions/ and archived_sessions/
 # opencode = "~/.local/share/opencode"  # or the opencode.db file itself
