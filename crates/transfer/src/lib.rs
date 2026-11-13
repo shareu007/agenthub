@@ -1,7 +1,7 @@
 //! Text-only handoff into NEW native sessions. Source session records stay unchanged.
 use agenthub_core::{Agent, Message, ResumeCommand, Session};
 use anyhow::{bail, Context, Result};
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -298,7 +298,7 @@ impl Plan {
         if self.target == Agent::Opencode {
             return self.write_opencode(&id);
         }
-        let now = Utc::now();
+        let now = agenthub_core::utc_now();
         let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let (directory, filename) = match self.target {
             Agent::Pi => (
@@ -467,7 +467,7 @@ impl Plan {
         if !version.lines().any(|line| line.trim().starts_with("1.")) {
             bail!("OpenCode import currently supports native 1.x only; other formats need a verified importer");
         }
-        let now = Utc::now().timestamp_millis();
+        let now = agenthub_core::utc_now().timestamp_millis();
         let session_id = format!("ses_{}", id.replace('-', ""));
         let mut file = tempfile::NamedTempFile::new()?;
         {

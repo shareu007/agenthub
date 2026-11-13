@@ -2,6 +2,9 @@
 """Exercise the real installer against controlled archives, without network access."""
 import hashlib
 import io
+import json
+import re
+import sys
 import os
 from pathlib import Path
 import shutil
@@ -88,6 +91,31 @@ cp "$AH_TEST_ASSETS/${url##*/}" "$out"
                     self.assertTrue(os.access(path, os.X_OK))
                     self.assertEqual(subprocess.check_output([str(path)], text=True).strip(), 'agenthub test binary')
                 self.assertFalse(list(self.dest.glob('.agenthub-install.*')))
+
+    def test_offline_archives_never_use_download_or_build_tools(self):
+        for system, arch, target in [('Linux', 'x86_64', 'x86_64-unknown-linux-musl'),
+                                      ('Linux', 'aarch64', 'aarch64-unknown-linux-musl'),
+                                      ('Darwin', 'arm64', 'aarch64-apple-darwin'),
+                                      ('Darwin', 'x86_64', 'x86_64-apple-darwin')]:
+            name = self.archive(target)
+            # Prefer a per-archive checksum, as supplied with offline downloads.
+            (self.assets/(name+'.sha256')).write_text((self.assets/'SHA256SUMS').read_text())
+            (self.assets/'SHA256SUMS').unlink()
+            result = self.run_install('--archive', str(self.assets/name), AH_TEST_OS=system, AH_TEST_ARCH=arch)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists(), 'offline installation must not call curl')
+
+    def test_offline_refuses_wrong_target_missing_checksum_or_ambiguous_options(self):
+        name = self.archive('aarch64-apple-darwin')
+        result = self.run_install('--archive', str(self.assets/name))
+        self.assertNotEqual(result.returncode, 0)
+        name = self.archive('x86_64-unknown-linux-musl')
+        (self.assets/'SHA256SUMS').unlink()
+        self.assertNotEqual(self.run_install('--archive', str(self.assets/name)).returncode, 0)
+        for option in [('--from-source',), ('--version', 'v0.1.0')]:
+            self.assertNotEqual(self.run_install('--archive', str(self.assets/name), *option).returncode, 0)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.dest.exists())
 
     def test_shasum_path_without_gnu_sha256sum(self):
         # macOS normally provides shasum, not GNU sha256sum.
@@ -200,6 +228,29 @@ class PackageTests(unittest.TestCase):
                 path.write_bytes(data)
                 with self.assertRaisesRegex(RuntimeError, 'must be static'):
                     verify_binary(path, arch+'-unknown-linux-musl')
+
+    def test_cross_package_records_pending_execution_and_includes_offline_installer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = bytearray(120)
+            data[:6] = b'\x7fELF\x02\x01'
+            struct.pack_into('<H', data, 18, 62)
+            struct.pack_into('<Q', data, 32, 64)
+            struct.pack_into('<HH', data, 54, 56, 1)
+            for name in ['ah', 'agenthub']:
+                (root/name).write_bytes(data)
+            version = re.search(r'^version = "([^"]+)"', (ROOT/'Cargo.toml').read_text(), re.M)[1]
+            result = subprocess.run([sys.executable, str(ROOT/'scripts/package_release.py'),
+                '--target', 'x86_64-unknown-linux-musl', '--version', 'v'+version,
+                '--bin-dir', str(root), '--output', str(root/'dist'), '--cross-build'],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            archive = root/'dist/agenthub-x86_64-unknown-linux-musl.tar.gz'
+            with tarfile.open(archive) as package:
+                self.assertEqual(set(package.getnames()), {'ah', 'agenthub', 'install.sh', 'BUILD-INFO.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'})
+                self.assertFalse(json.load(package.extractfile('BUILD-INFO.json'))['native_version_check'])
+            expected = hashlib.sha256(archive.read_bytes()).hexdigest()
+            self.assertEqual(Path(str(archive)+'.sha256').read_text(), f'{expected}  {archive.name}\n')
 
     def test_macos_target_and_bad_archive_members(self):
         with tempfile.TemporaryDirectory() as tmp:

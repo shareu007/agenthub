@@ -170,7 +170,7 @@ impl Store {
     fn ingest(&mut self, adapter: &dyn Adapter, source: &Source, id: &str, fingerprint: &str, root: &str) -> Result<()> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO sources(id,agent,root,path,fingerprint,parser_version,present,synced_at) VALUES(?1,?2,?3,?4,?5,?6,1,?7) ON CONFLICT(id) DO UPDATE SET root=excluded.root,fingerprint=excluded.fingerprint,parser_version=excluded.parser_version,present=1,synced_at=excluded.synced_at",
-            params![id,source.agent.as_str(),root,path_text(&source.path)?,fingerprint,parser_version(source.agent),chrono::Utc::now().timestamp_millis()])?;
+            params![id,source.agent.as_str(),root,path_text(&source.path)?,fingerprint,parser_version(source.agent),agenthub_core::utc_now().timestamp_millis()])?;
         tx.execute("UPDATE sessions SET available=0 WHERE source_id=?1", [id])?;
         {
             let mut writer = Writer { tx: &tx, source_id: id, current: None, count: 0, size: 0 };

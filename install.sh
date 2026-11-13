@@ -5,6 +5,7 @@ set -eu
 REPO=https://github.com/shareu007/agenthub
 version=latest
 from_source=false
+local_archive=
 bin_dir=${AGENTHUB_INSTALL_DIR:-}
 work_dir=
 stage_dir=
@@ -14,11 +15,12 @@ usage() {
     cat <<'EOF'
 Install agenthub and ah on macOS or Linux (ARM64 / x86_64).
 
-Usage: sh install.sh [--version VERSION] [--bin-dir DIRECTORY] [--from-source]
+Usage: sh install.sh [--version VERSION] [--bin-dir DIRECTORY] [--from-source | --archive FILE]
 
   --version VERSION  Install a release, e.g. v0.1.0 (default: latest).
   --bin-dir DIR      Install both commands here (default: ~/.local/bin).
   --from-source      Build with Cargo; defaults to main, or the selected version tag.
+  --archive FILE     Install a local archive without any network access.
   -h, --help         Show this help.
 
 Binary installation needs curl, tar and sha256sum or shasum.
@@ -28,15 +30,18 @@ EOF
 }
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --version|--bin-dir)
+        --version|--bin-dir|--archive)
             if [ "$#" -lt 2 ] || [ -z "$2" ]; then fail "$1 needs a value"; fi
-            case "$1" in --version) version=$2;; --bin-dir) bin_dir=$2;; esac
+            case "$1" in --version) version=$2;; --bin-dir) bin_dir=$2;; --archive) local_archive=$2;; esac
             shift 2 ;;
         --from-source) from_source=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1 (use --help)" ;;
     esac
 done
+if [ -n "$local_archive" ] && { [ "$from_source" = true ] || [ "$version" != latest ]; }; then
+    fail '--archive cannot be combined with --from-source or --version'
+fi
 if [ "$version" != latest ]; then
     printf '%s\n' "$version" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$' || fail 'invalid version; use v0.1.0 or latest'
     case "$version" in v*) ;; *) version=v$version;; esac
@@ -78,7 +83,7 @@ if [ "$from_source" = true ]; then
     cargo install --locked --path "$work_dir/source/crates/cli" --bins --root "$work_dir/build"
     payload=$work_dir/build/bin
 else
-    for tool in curl tar; do command -v "$tool" >/dev/null 2>&1 || fail "binary installation requires $tool"; done
+    command -v tar >/dev/null 2>&1 || fail "binary installation requires tar"
     if command -v sha256sum >/dev/null 2>&1; then checksum=sha256sum
     elif command -v shasum >/dev/null 2>&1; then checksum=shasum
     else fail 'install sha256sum or shasum to verify the download'; fi
@@ -89,9 +94,23 @@ else
         curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --show-error --silent --location \
             --retry 2 --connect-timeout 15 --max-time 180 "$1" --output "$2"
     }
-    printf 'Downloading AgentHub for %s...\n' "$target"
-    download "$base/$asset" "$work_dir/$asset" || fail 'release download failed; check Releases, or use --from-source with Rust installed'
-    download "$base/SHA256SUMS" "$work_dir/SHA256SUMS" || fail 'could not download release checksums; nothing installed'
+    if [ -n "$local_archive" ]; then
+        [ "${local_archive##*/}" = "$asset" ] || fail "this system needs $asset"
+        cp "$local_archive" "$work_dir/$asset"
+        if [ -f "$local_archive.sha256" ]; then
+            cp "$local_archive.sha256" "$work_dir/SHA256SUMS"
+        else
+            archive_parent=$(dirname "$local_archive")
+            [ -f "$archive_parent/SHA256SUMS" ] || fail 'copy the matching .sha256 file or SHA256SUMS alongside the archive'
+            cp "$archive_parent/SHA256SUMS" "$work_dir/SHA256SUMS"
+        fi
+        printf 'Installing offline archive for %s...\n' "$target"
+    else
+        command -v curl >/dev/null 2>&1 || fail 'binary download requires curl'
+        printf 'Downloading AgentHub for %s...\n' "$target"
+        download "$base/$asset" "$work_dir/$asset" || fail 'release download failed; check Releases, or use --from-source with Rust installed'
+        download "$base/SHA256SUMS" "$work_dir/SHA256SUMS" || fail 'could not download release checksums; nothing installed'
+    fi
     expected=$(awk -v asset="$asset" '$2 == asset {print $1}' "$work_dir/SHA256SUMS")
     [ "${#expected}" -eq 64 ] || fail 'missing or invalid release checksum'
     case "$expected" in *[!0-9a-fA-F]*) fail 'invalid release checksum';; esac

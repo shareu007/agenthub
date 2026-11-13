@@ -1,7 +1,7 @@
 # Packaging and releases
 
 The public release artifacts are `ah` and `agenthub`, packaged together with the
-MIT license and third-party notices. There is no package registry dependency at
+installer, build information, MIT license and third-party notices. There is no package registry dependency at
 install time.
 
 ## Platform matrix
@@ -49,11 +49,12 @@ that the corresponding release artifact was built and tested.
    ```
 
 5. The **Release** workflow builds/tests all four targets, then creates a **draft**
-   GitHub Release with four archives and `SHA256SUMS`. It does not publish it.
+   GitHub Release with four archives, per-archive `.sha256` files and `SHA256SUMS`. It does not publish it.
    A missing platform or failed check prevents the draft step. You can also run
    the workflow manually against an existing version tag.
 6. Review the draft, release notes and all four assets. Test the installer after
-   publishing; then remove the “after the first release” label from both READMEs.
+   publishing; then update the availability note in `docs/install.md` and the
+   corresponding labels in both READMEs.
    Publishing the draft and making the repository public are separate owner actions.
 
 Do not create a new version tag with a version that differs from `Cargo.toml`.
@@ -105,3 +106,20 @@ python3 -m venv .demo-venv
 This writes `docs/assets/demo.gif` and `docs/assets/demo.png`. Review every frame
 before committing. The recording uses a temporary config and storage paths;
 it never reads the default AgentHub index or user's native session stores.
+
+## Offline archives and cross-build previews
+
+The packager includes `install.sh` and `BUILD-INFO.json`, and writes a per-archive
+`.sha256`. Users can copy just the selected pair to an offline machine and follow
+[offline installation](install.md#offline-installation). The included installer
+supports `--archive` without using curl, Cargo or Git.
+
+Native CI keeps the normal packager path, which executes each binary's version
+check. For separately delivered cross-build previews, `--cross-build` only skips
+execution after checking the file format and architecture, checks the source
+version, and records `native_version_check: false`. It must not be described as a
+native runtime test. No cross-build preview is automatically published by CI.
+
+The application only uses UTC. It obtains UTC from `SystemTime` rather than
+loading a local timezone database, avoiding unnecessary platform timezone
+libraries in these builds.

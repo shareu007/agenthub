@@ -183,6 +183,11 @@ pub fn resume_command(session: &Session) -> Result<ResumeCommand> {
     Ok(ResumeCommand { program: session.agent.as_str().into(), args, cwd: session.project_path.clone(), env: Vec::new() })
 }
 
+/// Current UTC time without loading the host's local-timezone database.
+pub fn utc_now() -> chrono::DateTime<chrono::Utc> {
+    std::time::SystemTime::now().into()
+}
+
 pub fn timestamp(value: &serde_json::Value) -> Option<i64> {
     if let Some(t) = value.as_i64() {
         // Agent numeric timestamps are milliseconds since the epoch.

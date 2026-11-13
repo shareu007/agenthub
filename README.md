@@ -6,12 +6,48 @@
 
 Browse conversation history, find past work, and pick up where you left off across Claude Code, Codex, OpenCode, Pi, and Google Antigravity CLI (AGY).
 
-[Getting started](#getting-started) · [Installation](#installation) · [Usage](#usage) · [中文](README.zh-CN.md)
+[Installation](#installation) · [Getting started](#getting-started) · [Usage](#usage) · [中文](README.zh-CN.md)
 
 [![CI](https://github.com/shareu007/agenthub/actions/workflows/ci.yml/badge.svg)](https://github.com/shareu007/agenthub/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 </div>
+
+## Installation
+
+macOS 13+ / Linux · ARM64 / x86_64 · Installs both `ah` and `agenthub`.
+
+### Install script (published releases)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
+sh install.sh
+```
+
+### Offline binary package
+
+Download your platform archive and its `.sha256` file from
+[Releases](https://github.com/shareu007/agenthub/releases), and copy both to the offline machine.
+Extract the archive, then use its included installer:
+
+```sh
+sh install.sh --archive ./agenthub-x86_64-unknown-linux-musl.tar.gz
+```
+
+[Platform packages and offline steps](docs/install.md#offline-installation).
+Prebuilt downloads require a published Release; source installation is available now.
+
+### Build from source
+
+Requires [Rust 1.85+](https://rustup.rs/), Git and a C compiler.
+
+```sh
+git clone https://github.com/shareu007/agenthub.git
+cd agenthub
+cargo install --locked --path crates/cli --force
+```
+
+[Version, directory and PATH options](docs/install.md).
 
 ![AgentHub: browse sessions, switch agents, and search](docs/assets/demo.gif)
 
@@ -32,7 +68,7 @@ session in the agent that created it.
 
 ## Getting started
 
-Install AgentHub using one of the methods below, then run:
+Install AgentHub using one of the methods above, then run:
 
 ```sh
 ah sync
@@ -45,59 +81,6 @@ first. Press Enter to resume a session, `/` to search, and `q` to quit.
 Install the agents you use and make their commands available in your terminal.
 `ah sync` discovers sessions for those agents. If something is missing, run
 `ah doctor` to check their locations.
-
-## Installation
-
-AgentHub targets **macOS 13+ and Linux**, on **Apple Silicon / ARM64** and
-**Intel / AMD x86_64**. Both commands are installed together.
-
-### Build from source — available now
-
-Requires [Rust 1.85+](https://rustup.rs/), Git, and a C compiler
-(Xcode Command Line Tools on macOS, or a C build toolchain on Linux).
-
-```sh
-git clone https://github.com/shareu007/agenthub.git
-cd agenthub
-cargo install --locked --path crates/cli --force
-```
-
-Cargo installs `ah` and `agenthub` into `~/.cargo/bin`. Make sure it is on your PATH.
-
-Alternatively, use the installer to build and install into `~/.local/bin`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
-sh install.sh --from-source
-```
-
-### Prebuilt binaries — after the first release is published
-
-The release workflow builds all four platforms. Once a version is published on
-[Releases](https://github.com/shareu007/agenthub/releases), install without Rust:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
-sh install.sh
-```
-
-The script selects your OS and architecture, verifies the download's SHA-256,
-and installs both commands into `~/.local/bin`. It does not require sudo or edit
-your shell configuration. If needed, add that directory to your PATH:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-To choose a release or destination:
-
-```sh
-sh install.sh --version v0.1.0 --bin-dir "$HOME/.local/bin"
-```
-
-You can also download the archive for your platform and `SHA256SUMS` from
-Releases and install the two executables yourself. Linux binaries are static;
-no separate SQLite installation is needed.
 
 ## Usage
 

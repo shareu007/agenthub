@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Package native release binaries; run on the same architecture as the build."""
 import argparse
+import hashlib
+import io
+import json
 from pathlib import Path
 import re
 import struct
@@ -40,20 +43,29 @@ def main():
     parser.add_argument('--target', choices=TARGETS, required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--bin-dir', type=Path, required=True)
+    parser.add_argument('--cross-build', action='store_true', help='Do not execute cross-built binaries; record native verification as pending')
     parser.add_argument('--output', type=Path, default=Path('dist'))
     args = parser.parse_args()
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', args.version):
         parser.error('version must be a tag such as v0.1.0')
     root = Path(__file__).resolve().parents[1]
+    source_version = re.search(r'^version = \"([^\"]+)\"', (root/'Cargo.toml').read_text(), re.M)[1]
+    if args.version != 'v'+source_version:
+        parser.error('version must match Cargo.toml')
     files = {name: args.bin_dir/name for name in ('agenthub', 'ah')}
     for name, path in files.items():
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f'{path}: expected a regular executable file')
         verify_binary(path, args.target)
+        if args.cross_build:
+            continue
         actual = subprocess.check_output([str(path.resolve()), '--version'], text=True).strip()
         if actual != f'agenthub {args.version[1:]}':
             raise RuntimeError(f'{name} version differs from tag: {actual!r}')
-    files.update({name: root/name for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md')})
+    files.update({name: root/name for name in ('install.sh', 'LICENSE', 'THIRD_PARTY_NOTICES.md')})
+    info_data = dict(version=args.version, target=args.target,
+                     source_revision=subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
+                     native_version_check=not args.cross_build)
     args.output.mkdir(parents=True, exist_ok=True)
     archive = args.output/f'agenthub-{args.target}.tar.gz'
     with tarfile.open(archive, 'w:gz') as tar:
@@ -61,10 +73,17 @@ def main():
             info = tar.gettarinfo(str(path), arcname=name)
             info.uid = info.gid = 0
             info.uname = info.gname = ''
-            info.mode = 0o755 if name in ('ah', 'agenthub') else 0o644
+            info.mode = 0o755 if name in ('ah', 'agenthub', 'install.sh') else 0o644
             info.mtime = 0
             with path.open('rb') as stream:
                 tar.addfile(info, stream)
+        data = (json.dumps(info_data, indent=2)+'\n').encode()
+        manifest = tarfile.TarInfo('BUILD-INFO.json')
+        manifest.mode = 0o644
+        manifest.size = len(data)
+        tar.addfile(manifest, io.BytesIO(data))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_name(archive.name+'.sha256').write_text(f'{digest}  {archive.name}\n')
     print(archive)
 
 

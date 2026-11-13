@@ -6,9 +6,44 @@
 
 查看历史对话、找到之前的工作，再回到原来的 Agent 继续开发。支持 Claude Code、Codex、OpenCode、Pi 和 Google Antigravity CLI（AGY）。
 
-[快速开始](#快速开始) · [安装](#安装) · [使用](#使用) · [English](README.md)
+[安装](#安装) · [快速开始](#快速开始) · [使用](#使用) · [English](README.md)
 
 </div>
+
+## 安装
+
+macOS 13+ / Linux · ARM64 / x86_64 · 同时安装 `ah` 和 `agenthub`。
+
+### 安装脚本（发布后可用）
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
+sh install.sh
+```
+
+### 离线二进制包
+
+从 [Releases](https://github.com/shareu007/agenthub/releases) 下载对应平台的压缩包和 `.sha256` 文件，
+一起复制到离线机器。解压后使用包内的安装脚本：
+
+```sh
+sh install.sh --archive ./agenthub-x86_64-unknown-linux-musl.tar.gz
+```
+
+[各平台安装包与离线步骤](docs/install.md#offline-installation)。
+预构建下载需要先发布 Release；目前也可直接从源码安装。
+
+### 从源码安装
+
+需要 [Rust 1.85+](https://rustup.rs/)、Git 和 C 编译器。
+
+```sh
+git clone https://github.com/shareu007/agenthub.git
+cd agenthub
+cargo install --locked --path crates/cli --force
+```
+
+[指定版本、安装目录和 PATH 配置](docs/install.md)。
 
 ![AgentHub：浏览会话、切换 Agent 和搜索](docs/assets/demo.gif)
 
@@ -37,56 +72,6 @@ ah
 
 请先安装要使用的 Agent，并确保其命令在终端中可用。默认同步这些 Agent 的历史；
 会话没有出现时，可以用 `ah doctor` 检查存储位置和客户端。
-
-## 安装
-
-面向 **macOS 13+、Linux**，支持 **Apple Silicon / ARM64、Intel / AMD x86_64**。
-两条命令会同时安装。
-
-### 从源码安装：现在即可使用
-
-需要 [Rust 1.85+](https://rustup.rs/)、Git 和 C 编译器。
-macOS 可安装 Xcode Command Line Tools，Linux 可安装发行版提供的 C 构建工具。
-
-```sh
-git clone https://github.com/shareu007/agenthub.git
-cd agenthub
-cargo install --locked --path crates/cli --force
-```
-
-命令安装到 `~/.cargo/bin`，请确保该目录已加入 PATH。
-也可以让脚本从源码构建，安装到 `~/.local/bin`：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
-sh install.sh --from-source
-```
-
-### 二进制安装：首个正式版本发布后可用
-
-发布流程会为上述四个平台构建安装包。
-[Releases](https://github.com/shareu007/agenthub/releases) 中有已发布版本后，即可免 Rust 安装：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
-sh install.sh
-```
-
-脚本自动识别系统和架构，校验 SHA-256，安装到 `~/.local/bin`。
-不需要 sudo，也不会修改 shell 配置。如果该目录不在 PATH 中，请添加：
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-指定版本和目录：
-
-```sh
-sh install.sh --version v0.1.0 --bin-dir "$HOME/.local/bin"
-```
-
-也可从 Releases 手动下载对应平台的压缩包及 `SHA256SUMS`，校验后取出 `ah`、`agenthub`。
-Linux 提供静态二进制，无需单独安装 SQLite。
 
 ## 使用
 
