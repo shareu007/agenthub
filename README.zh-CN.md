@@ -10,6 +10,11 @@
 
 </div>
 
+![AgentHub：浏览会话、切换 Agent 和搜索](docs/assets/demo.gif)
+
+*演示由真实 CLI 录制，使用示例会话，不包含私人对话。*
+[查看静态截图](docs/assets/demo.png)。
+
 ## 安装
 
 macOS 13+ / Linux · ARM64 / x86_64 · 同时安装 `ah` 和 `agenthub`。
@@ -45,10 +50,6 @@ cargo install --locked --path crates/cli --force
 
 [指定版本、安装目录和 PATH 配置](docs/install.md)。
 
-![AgentHub：浏览会话、切换 Agent 和搜索](docs/assets/demo.gif)
-
-*演示由真实 CLI 录制，使用示例会话，不包含私人对话。*
-[查看静态截图](docs/assets/demo.png)。
 
 ## 功能
 

@@ -13,6 +13,11 @@ Browse conversation history, find past work, and pick up where you left off acro
 
 </div>
 
+![AgentHub: browse sessions, switch agents, and search](docs/assets/demo.gif)
+
+*Recorded from AgentHub with sample sessions. No private conversations are shown.*
+[View a still image](docs/assets/demo.png).
+
 ## Installation
 
 macOS 13+ / Linux · ARM64 / x86_64 · Installs both `ah` and `agenthub`.
@@ -49,10 +54,6 @@ cargo install --locked --path crates/cli --force
 
 [Version, directory and PATH options](docs/install.md).
 
-![AgentHub: browse sessions, switch agents, and search](docs/assets/demo.gif)
-
-*Recorded from AgentHub with sample sessions. No private conversations are shown.*
-[View a still image](docs/assets/demo.png).
 
 ## Why AgentHub?
 
