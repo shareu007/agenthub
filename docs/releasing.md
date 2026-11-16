@@ -23,10 +23,10 @@ The script/format tests simulate all platform selections. That verifies installe
 logic, not execution on another OS/architecture. Only completed matrix jobs prove
 that the corresponding release artifact was built and tested.
 
-## Prepare the first release
+## Prepare a release
 
-1. Review the English/Chinese README and example configuration. The current README
-   labels source installation as available, and binary installation as pending.
+1. Review the English/Chinese README and example configuration. Check that the
+   documented commands and supported targets match the intended release.
 2. Update `[workspace.package].version` in `Cargo.toml` and regenerate `Cargo.lock`
    when changing version. The current version is `0.1.2`.
 3. Run the local checks and commit the intended release revision:
@@ -52,10 +52,10 @@ that the corresponding release artifact was built and tested.
    GitHub Release with four archives, per-archive `.sha256` files and `SHA256SUMS`. It does not publish it.
    A missing platform or failed check prevents the draft step. You can also run
    the workflow manually against an existing version tag.
-6. Review the draft, release notes and all four assets. Test the installer after
-   publishing; then update the availability note in `docs/install.md` and the
-   corresponding labels in both READMEs.
-   Publishing the draft and making the repository public are separate owner actions.
+6. Review the draft, release notes, four archives and checksum files. After
+   publishing, test the README installer against the public latest-release URL
+   in a fresh destination, check both commands' versions, and verify offline
+   installation from the downloaded archive. Keep the installation docs current.
 
 Do not create a new version tag with a version that differs from `Cargo.toml`.
 The workflow refuses a mismatch and refuses to silently replace an existing

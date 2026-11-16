@@ -19,11 +19,12 @@
 
 macOS 13+ / Linux · ARM64 / x86_64 · 同时安装 `ah` 和 `agenthub`。
 
-### 安装脚本（发布后可用）
+### 安装脚本
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
 sh install.sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### 离线二进制包
@@ -36,7 +37,6 @@ sh install.sh --archive ./agenthub-x86_64-unknown-linux-musl.tar.gz
 ```
 
 [各平台安装包与离线步骤](docs/install.md#offline-installation)。
-预构建下载需要先发布 Release；目前也可直接从源码安装。
 
 ### 从源码安装
 

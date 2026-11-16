@@ -10,15 +10,14 @@ curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh 
 sh install.sh
 ```
 
-This needs a published [Release](https://github.com/shareu007/agenthub/releases).
-There is no published release yet. Source installation is available immediately;
-separately supplied cross-build previews should be used according to their
-verification status, not assumed to be tested native releases.
+The installer downloads the latest published [Release](https://github.com/shareu007/agenthub/releases/latest),
+checks its SHA-256, and installs both commands into `~/.local/bin`. The four release
+archives are built and tested on their corresponding native runners.
 
 Options:
 
 ```sh
-sh install.sh --version v0.1.0
+sh install.sh --version v0.1.2
 sh install.sh --bin-dir "$HOME/.local/bin"
 sh install.sh --from-source
 ```

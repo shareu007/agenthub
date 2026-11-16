@@ -22,11 +22,12 @@ Browse conversation history, find past work, and pick up where you left off acro
 
 macOS 13+ / Linux · ARM64 / x86_64 · Installs both `ah` and `agenthub`.
 
-### Install script (published releases)
+### Install script
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shareu007/agenthub/main/install.sh -o install.sh
 sh install.sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Offline binary package
@@ -40,7 +41,6 @@ sh install.sh --archive ./agenthub-x86_64-unknown-linux-musl.tar.gz
 ```
 
 [Platform packages and offline steps](docs/install.md#offline-installation).
-Prebuilt downloads require a published Release; source installation is available now.
 
 ### Build from source
 
