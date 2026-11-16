@@ -28,7 +28,7 @@ that the corresponding release artifact was built and tested.
 1. Review the English/Chinese README and example configuration. The current README
    labels source installation as available, and binary installation as pending.
 2. Update `[workspace.package].version` in `Cargo.toml` and regenerate `Cargo.lock`
-   when changing version. It currently starts at `0.1.0`.
+   when changing version. The current version is `0.1.1`.
 3. Run the local checks and commit the intended release revision:
 
    ```sh
@@ -44,8 +44,8 @@ that the corresponding release artifact was built and tested.
 4. When ready, create and push the matching tag:
 
    ```sh
-   git tag -a v0.1.0 -m "AgentHub v0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.1.1 -m "AgentHub v0.1.1"
+   git push origin v0.1.1
    ```
 
 5. The **Release** workflow builds/tests all four targets, then creates a **draft**
@@ -76,7 +76,7 @@ commands. Checksums detect download corruption; they are not publisher signature
 A failed download/build/checksum leaves existing commands alone. Each final rename
 is atomic; replacing the pair is not a filesystem-wide transaction.
 
-It supports `--version v0.1.0`, `--bin-dir /path`, `AGENTHUB_INSTALL_DIR`, and
+It supports `--version v0.1.1`, `--bin-dir /path`, `AGENTHUB_INSTALL_DIR`, and
 `--from-source`. Source mode builds main by default, or the selected release tag,
 using `cargo install --locked`. No fallback silently installs a Rust toolchain.
 No shell startup files or agent stores are modified.

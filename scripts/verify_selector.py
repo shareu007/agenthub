@@ -5,6 +5,7 @@ Verifies keyboard selection/launch, terminal restoration, cancellation, regroupi
 sorting, page changes, and redirected output. No real agent or model is invoked.
 """
 import argparse
+import errno
 import fcntl
 import json
 import os
@@ -20,6 +21,23 @@ import sys
 import tempfile
 import termios
 import time
+
+
+def read_chunk(master):
+    try:
+        return os.read(master, 65536)
+    except OSError as error:
+        if error.errno == errno.EIO:  # Linux PTY hangup; macOS returns b''.
+            return b''
+        raise
+
+
+def drain_output(master, output):
+    while select.select([master], [], [], 0)[0]:
+        chunk = read_chunk(master)
+        if not chunk:
+            break
+        output.extend(chunk)
 
 
 def terminal(command, environment, actions, size=(26, 110)):
@@ -40,18 +58,17 @@ def terminal(command, environment, actions, size=(26, 110)):
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
-                try:
-                    output.extend(os.read(master, 65536))
-                except OSError:
+                chunk = read_chunk(master)
+                if not chunk:
                     break
+                output.extend(chunk)
             if stage < len(actions) and actions[stage][0] in output[stage_start:]:
                 stage_start = len(output)
                 os.write(master, actions[stage][1])
                 stage += 1
             if process.poll() is not None:
                 # Drain bytes already written before asserting teardown order.
-                while select.select([master], [], [], 0)[0]:
-                    output.extend(os.read(master, 65536))
+                drain_output(master, output)
                 break
         else:
             raise RuntimeError('Selector did not complete; output tail: ' + bytes(output[-2000:]).decode(errors='replace'))
@@ -80,7 +97,7 @@ def main():
     args = parser.parse_args()
     binaries = [str((args.bin_dir/name).resolve()) for name in ['agenthub', 'ah']]
     with tempfile.TemporaryDirectory(prefix='agenthub-selector-') as tmp:
-        root = Path(tmp)
+        root = Path(tmp).resolve()
         source = root/'pi'
         source.mkdir()
         project = root/'project'

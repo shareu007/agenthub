@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (for example v0.1.0)
+        description: Existing version tag (for example v0.1.1)
         required: true
         type: string
 
@@ -81,6 +81,7 @@ jobs:
           import os, signal, subprocess, sys
           commands = [
               ['cargo', 'test', '--locked', '--workspace', '--target', os.environ['TARGET']],
+              ['python3', '-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'test_selector_io.py'],
               ['python3', 'scripts/verify_selector.py', '--bin-dir', 'target/'+os.environ['TARGET']+'/release'],
           ]
           for command in commands:
