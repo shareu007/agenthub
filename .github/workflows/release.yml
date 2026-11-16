@@ -96,7 +96,7 @@ jobs:
                   output, _ = process.communicate(timeout=10)
               print(output, flush=True)
               if timed_out or process.returncode:
-                  message = ('Native check timed out. ' if timed_out else 'Native check failed. ') + output[-12000:]
+                  message = ('Native check timed out. ' if timed_out else 'Native check failed. ') + output[-3000:]
                   print('::error::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'), flush=True)
                   sys.exit(1)
           PYTEST
