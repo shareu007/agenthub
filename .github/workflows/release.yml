@@ -33,6 +33,7 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       MACOSX_DEPLOYMENT_TARGET: '13.0'
@@ -66,15 +67,42 @@ jobs:
           echo 'CC_aarch64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
           echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc' >> "$GITHUB_ENV"
           echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=cc' >> "$GITHUB_ENV"
-      - name: Test and build native target
+      - name: Compile native tests
+        timeout-minutes: 15
+        run: cargo test --locked --workspace --target "${{ matrix.target }}" --no-run
+      - name: Build release binaries
+        timeout-minutes: 15
+        run: cargo build --locked --release -p agenthub-cli --target "${{ matrix.target }}"
+      - name: Run native tests and terminal checks
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo test --locked --workspace --target "$TARGET"
-          cargo build --locked --release -p agenthub-cli --target "$TARGET"
-          python3 scripts/verify_selector.py --bin-dir "target/$TARGET/release"
+          python3 - <<'PYTEST'
+          import os, signal, subprocess, sys
+          commands = [
+              ['cargo', 'test', '--locked', '--workspace', '--target', os.environ['TARGET']],
+              ['python3', 'scripts/verify_selector.py', '--bin-dir', 'target/'+os.environ['TARGET']+'/release'],
+          ]
+          for command in commands:
+              print('Running:', ' '.join(command), flush=True)
+              process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+              timed_out = False
+              try:
+                  output, _ = process.communicate(timeout=120)
+              except subprocess.TimeoutExpired:
+                  timed_out = True
+                  os.killpg(process.pid, signal.SIGKILL)
+                  output, _ = process.communicate(timeout=10)
+              print(output, flush=True)
+              if timed_out or process.returncode:
+                  message = ('Native check timed out. ' if timed_out else 'Native check failed. ') + output[-12000:]
+                  print('::error::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'), flush=True)
+                  sys.exit(1)
+          PYTEST
+      - name: Verify installer and package binaries
+        run: |
           python3 scripts/verify_installer.py
-          python3 scripts/package_release.py --target "$TARGET" --version "$RELEASE_TAG" --bin-dir "target/$TARGET/release"
+          python3 scripts/package_release.py --target "${{ matrix.target }}" --version "$RELEASE_TAG" --bin-dir "target/${{ matrix.target }}/release"
       - uses: actions/upload-artifact@v4
         with:
           name: agenthub-${{ matrix.target }}
