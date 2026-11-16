@@ -120,7 +120,22 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        // A concurrent rollback-to-WAL transition can return SQLITE_BUSY without
+        // invoking SQLite's busy handler. Retry this initialization step only;
+        // never replay migrations or writes after a partially completed batch.
+        let wal_started = std::time::Instant::now();
+        loop {
+            match conn.execute_batch("PRAGMA journal_mode=WAL;") {
+                Ok(()) => break,
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                        && wal_started.elapsed() < Duration::from_secs(3) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error).context("enable WAL for index"),
+            }
+        }
+        conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
         Ok(Self { conn })
     }
 

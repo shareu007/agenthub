@@ -251,7 +251,7 @@ fn schema_one_migrates_cached_bytes_without_source_access() {
 #[test]
 fn concurrent_first_open_and_migration_are_idempotent() {
     use std::sync::{Arc, Barrier};
-    for migrate in [false, true] {
+    for migrate in (0..10).flat_map(|_| [false, true]) {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("index.db");
         if migrate {

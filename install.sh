@@ -17,7 +17,7 @@ Install agenthub and ah on macOS or Linux (ARM64 / x86_64).
 
 Usage: sh install.sh [--version VERSION] [--bin-dir DIRECTORY] [--from-source | --archive FILE]
 
-  --version VERSION  Install a release, e.g. v0.1.1 (default: latest).
+  --version VERSION  Install a release, e.g. v0.1.2 (default: latest).
   --bin-dir DIR      Install both commands here (default: ~/.local/bin).
   --from-source      Build with Cargo; defaults to main, or the selected version tag.
   --archive FILE     Install a local archive without any network access.
@@ -43,7 +43,7 @@ if [ -n "$local_archive" ] && { [ "$from_source" = true ] || [ "$version" != lat
     fail '--archive cannot be combined with --from-source or --version'
 fi
 if [ "$version" != latest ]; then
-    printf '%s\n' "$version" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$' || fail 'invalid version; use v0.1.1 or latest'
+    printf '%s\n' "$version" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$' || fail 'invalid version; use v0.1.2 or latest'
     case "$version" in v*) ;; *) version=v$version;; esac
 fi
 case "$(uname -s)" in

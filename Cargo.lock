@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agenthub-adapters"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agenthub-adapters",
  "agenthub-core",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-index"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agenthub-adapters",
  "agenthub-core",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-transfer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agenthub-adapters",
  "agenthub-core",

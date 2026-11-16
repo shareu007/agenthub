@@ -49,15 +49,34 @@ def terminal(command, environment, actions, size=(26, 110)):
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
-                               env=environment, preexec_fn=child)
+    # Keep the controlling session leader alive until we inspect terminal flags.
+    # Darwin revokes the slave when that leader exits, so checking afterwards
+    # would raise ENOTTY instead of testing the CLI's terminal restoration.
+    status_read, status_write = os.pipe()
+    release_read, release_write = os.pipe()
+    guardian = '''
+import os, subprocess, sys
+code = subprocess.call(sys.argv[3:])
+os.write(int(sys.argv[1]), (str(code)+'\\n').encode())
+os.close(int(sys.argv[1]))
+os.read(int(sys.argv[2]), 1)
+sys.exit(code if code >= 0 else 128-code)
+'''
+    process = subprocess.Popen([sys.executable, '-c', guardian,
+                                str(status_write), str(release_read), *command],
+                               stdin=slave, stdout=slave, stderr=slave,
+                               env=environment, preexec_fn=child,
+                               pass_fds=(status_write, release_read))
+    os.close(status_write)
+    os.close(release_read)
     output = bytearray()
     stage = 0
     stage_start = 0
     try:
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
-            if select.select([master], [], [], 0.05)[0]:
+            ready = select.select([master, status_read], [], [], 0.05)[0]
+            if master in ready:
                 chunk = read_chunk(master)
                 if not chunk:
                     break
@@ -66,7 +85,7 @@ def terminal(command, environment, actions, size=(26, 110)):
                 stage_start = len(output)
                 os.write(master, actions[stage][1])
                 stage += 1
-            if process.poll() is not None:
+            if status_read in ready or process.poll() is not None:
                 # Drain bytes already written before asserting teardown order.
                 drain_output(master, output)
                 break
@@ -74,6 +93,7 @@ def terminal(command, environment, actions, size=(26, 110)):
             raise RuntimeError('Selector did not complete; output tail: ' + bytes(output[-2000:]).decode(errors='replace'))
         assert stage == len(actions), f'Only {stage}/{len(actions)} keyboard actions executed; output={bytes(output[-2000:])!r}'
         assert termios.tcgetattr(slave) == original, 'Terminal attributes were not restored'
+        os.write(release_write, b'1')
         return process.wait(timeout=2), bytes(output)
     finally:
         if process.poll() is None:
@@ -81,6 +101,8 @@ def terminal(command, environment, actions, size=(26, 110)):
             process.wait()
         os.close(master)
         os.close(slave)
+        os.close(status_read)
+        os.close(release_write)
 
 
 def screen_rows(output):
